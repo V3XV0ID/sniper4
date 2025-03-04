@@ -435,19 +435,21 @@ const SubwalletsPage: FC = () => {
                 </div>
             )}
 
-            {publicKey ? (
+            {publicKey && (
                 <div className="space-y-6">
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                        <p className="text-gray-300">Connected Wallet (Parent):</p>
-                        <div className="flex items-center space-x-2 mt-1">
-                            <p className="font-mono text-white">{truncateKey(publicKey.toString())}</p>
-                            <button
-                                onClick={() => copyToClipboard(publicKey.toString(), -1, 'public')}
-                                className="text-gray-400 hover:text-white transition-colors"
-                                title="Copy parent public key"
-                            >
-                                {isCopied(-1, 'public') ? '✓' : '📋'}
-                            </button>
+                    <div className="bg-gray-800 rounded-lg p-4 mb-6">
+                        <div className="flex items-center space-x-4">
+                            <span className="text-gray-400">Parent Wallet</span>
+                            <div className="flex items-center space-x-2">
+                                <span className="font-mono">{publicKey.toString()}</span>
+                                <button
+                                    onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
+                                    className="text-gray-400 hover:text-white transition-colors"
+                                    title="Copy public key"
+                                >
+                                    {isCopied(-1, 'public') ? '✓' : '📋'}
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -597,10 +599,6 @@ const SubwalletsPage: FC = () => {
                             </div>
                         </div>
                     )}
-                </div>
-            ) : (
-                <div className="text-center py-12 bg-gray-800 rounded-lg">
-                    <p className="text-xl text-gray-300">Please connect your Phantom wallet to continue</p>
                 </div>
             )}
         </div>
