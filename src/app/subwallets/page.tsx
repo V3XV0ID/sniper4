@@ -18,6 +18,7 @@ const SubwalletsPage: FC = () => {
     const [subwallets, setSubwallets] = useState<Subwallet[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+    const [copiedType, setCopiedType] = useState<'public' | 'private' | null>(null);
 
     const generateSubwallets = async () => {
         if (!publicKey || !signMessage) return;
@@ -56,14 +57,22 @@ const SubwalletsPage: FC = () => {
         ));
     };
 
-    const copyToClipboard = async (text: string, index: number) => {
+    const copyToClipboard = async (text: string, index: number, type: 'public' | 'private') => {
         try {
             await navigator.clipboard.writeText(text);
             setCopiedIndex(index);
-            setTimeout(() => setCopiedIndex(null), 2000); // Reset after 2 seconds
+            setCopiedType(type);
+            setTimeout(() => {
+                setCopiedIndex(null);
+                setCopiedType(null);
+            }, 2000);
         } catch (err) {
             console.error('Failed to copy:', err);
         }
+    };
+
+    const isCopied = (index: number, type: 'public' | 'private') => {
+        return copiedIndex === index && copiedType === type;
     };
 
     return (
@@ -78,7 +87,16 @@ const SubwalletsPage: FC = () => {
                 <div className="space-y-6">
                     <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
                         <p className="text-gray-300">Connected Wallet (Parent):</p>
-                        <p className="font-mono break-all text-white">{publicKey.toString()}</p>
+                        <div className="flex items-center space-x-2 mt-1">
+                            <p className="font-mono break-all text-white">{publicKey.toString()}</p>
+                            <button
+                                onClick={() => copyToClipboard(publicKey.toString(), -1, 'public')}
+                                className="text-gray-400 hover:text-white transition-colors"
+                                title="Copy parent public key"
+                            >
+                                {isCopied(-1, 'public') ? '✓' : '📋'}
+                            </button>
+                        </div>
                     </div>
 
                     <button
@@ -99,7 +117,7 @@ const SubwalletsPage: FC = () => {
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Index</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Public Key</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key (Click to Reveal)</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-700">
@@ -114,35 +132,25 @@ const SubwalletsPage: FC = () => {
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
-                                                                    copyToClipboard(wallet.publicKey, wallet.index);
+                                                                    copyToClipboard(wallet.publicKey, wallet.index, 'public');
                                                                 }}
                                                                 className="text-gray-400 hover:text-white transition-colors"
                                                                 title="Copy public key"
                                                             >
-                                                                {copiedIndex === wallet.index ? '✓' : '📋'}
+                                                                {isCopied(wallet.index, 'public') ? '✓' : '📋'}
                                                             </button>
                                                         </div>
                                                     </td>
                                                     <td 
-                                                        onClick={() => toggleReveal(wallet.index)}
-                                                        className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300 cursor-pointer hover:bg-gray-600 transition-colors group"
+                                                        className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300 group"
                                                     >
-                                                        <div className="flex items-center space-x-2">
-                                                            <div className="flex-1">
+                                                        <div className="flex items-center justify-between">
+                                                            <div 
+                                                                onClick={() => toggleReveal(wallet.index)}
+                                                                className="flex-1 cursor-pointer hover:bg-gray-600 transition-colors rounded px-2 py-1"
+                                                            >
                                                                 {wallet.isRevealed ? (
-                                                                    <div className="flex items-center space-x-2">
-                                                                        <span className="truncate max-w-md">{wallet.privateKey}</span>
-                                                                        <button
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                copyToClipboard(wallet.privateKey, wallet.index);
-                                                                            }}
-                                                                            className="text-gray-400 hover:text-white transition-colors"
-                                                                            title="Copy private key"
-                                                                        >
-                                                                            {copiedIndex === wallet.index ? '✓' : '📋'}
-                                                                        </button>
-                                                                    </div>
+                                                                    <span className="truncate max-w-md">{wallet.privateKey}</span>
                                                                 ) : (
                                                                     <div className="flex items-center space-x-2">
                                                                         <span className="text-gray-500">Click to reveal</span>
@@ -150,6 +158,16 @@ const SubwalletsPage: FC = () => {
                                                                     </div>
                                                                 )}
                                                             </div>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    copyToClipboard(wallet.privateKey, wallet.index, 'private');
+                                                                }}
+                                                                className="text-gray-400 hover:text-white transition-colors ml-2"
+                                                                title="Copy private key"
+                                                            >
+                                                                {isCopied(wallet.index, 'private') ? '✓' : '📋'}
+                                                            </button>
                                                         </div>
                                                     </td>
                                                 </tr>
