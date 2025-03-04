@@ -379,10 +379,70 @@ const SubwalletsPage: FC = () => {
 
     return (
         <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
-            <h1 className="text-4xl font-bold mb-8 text-white">Subwallets Generator</h1>
-            
-            <div className="mb-8">
-                <WalletMultiButtonDynamic className="!bg-purple-600 hover:!bg-purple-700" />
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+                {publicKey ? (
+                    <div className="flex items-center space-x-4 flex-wrap gap-y-4">
+                        <div className="flex items-center space-x-2">
+                            <span className="text-gray-400">Connected:</span>
+                            <span className="font-mono">{truncateKey(publicKey.toString())}</span>
+                            <button
+                                onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
+                                className="text-gray-400 hover:text-white transition-colors"
+                                title="Copy public key"
+                            >
+                                {isCopied(-1, 'public') ? '✓' : '📋'}
+                            </button>
+                        </div>
+
+                        {hasGeneratedWallets ? (
+                            <>
+                                <div className="bg-gray-800 px-4 py-2 rounded-lg">
+                                    <p className="text-gray-300">
+                                        Subwallets already generated
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={downloadSubwallets}
+                                    disabled={isLoading || !subwallets.length}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                                >
+                                    <span>Download Subwallets</span>
+                                    <span>📥</span>
+                                </button>
+                                <div className="relative">
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        onChange={restoreSubwallets}
+                                        className="hidden"
+                                        accept=".json"
+                                    />
+                                    <button
+                                        onClick={() => fileInputRef.current?.click()}
+                                        disabled={isLoading}
+                                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        Restore Subwallets
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <button
+                                onClick={generateSubwallets}
+                                disabled={isLoading || isGenerating}
+                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
+                            </button>
+                        )}
+                    </div>
+                ) : (
+                    <div className="text-gray-400">
+                        Connect your wallet to manage subwallets
+                    </div>
+                )}
+                
+                <WalletMultiButton />
             </div>
 
             {error && (
@@ -408,55 +468,6 @@ const SubwalletsPage: FC = () => {
                     </div>
 
                     <div className="flex space-x-4 items-center flex-wrap gap-y-4">
-                        {!hasGeneratedWallets ? (
-                            <button
-                                onClick={generateSubwallets}
-                                disabled={isLoading || isGenerating}
-                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
-                            </button>
-                        ) : (
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <p className="text-gray-300">
-                                    Subwallets already generated for this wallet
-                                </p>
-                            </div>
-                        )}
-
-                        {subwallets.length > 0 && (
-                            <button
-                                onClick={downloadSubwallets}
-                                disabled={isLoading}
-                                className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <span>Download Subwallets</span>
-                                <span>📥</span>
-                            </button>
-                        )}
-
-                        <div className="relative">
-                            <input
-                                type="file"
-                                ref={fileInputRef}
-                                onChange={restoreSubwallets}
-                                accept="application/json"
-                                className="hidden"
-                                id="restore-file"
-                                disabled={isLoading}
-                            />
-                            <button
-                                onClick={() => fileInputRef.current?.click()}
-                                disabled={isLoading}
-                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <span>
-                                    {loadingAction === 'restoring' ? 'Restoring...' : 'Restore Subwallets'}
-                                </span>
-                                <span>{loadingAction === 'restoring' ? '⏳' : '📤'}</span>
-                            </button>
-                        </div>
-
                         <div className="flex-1 flex space-x-2">
                             <input
                                 type="text"
