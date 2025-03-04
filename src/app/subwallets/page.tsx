@@ -6,9 +6,16 @@ import { FC, useState } from 'react';
 import { Keypair } from '@solana/web3.js';
 import { derivePath } from 'ed25519-hd-key';
 
+interface Subwallet {
+    publicKey: string;
+    privateKey: string;
+    index: number;
+    isRevealed: boolean;
+}
+
 const SubwalletsPage: FC = () => {
     const { publicKey, signMessage } = useWallet();
-    const [subwallets, setSubwallets] = useState<Array<{ publicKey: string; index: number }>>([]);
+    const [subwallets, setSubwallets] = useState<Subwallet[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
 
     const generateSubwallets = async () => {
@@ -16,20 +23,20 @@ const SubwalletsPage: FC = () => {
 
         setIsGenerating(true);
         try {
-            // Sign a message to use as seed
             const message = new TextEncoder().encode('Generate HD Wallets');
             const signature = await signMessage(message);
             const signatureBytes = Buffer.from(signature).toString('hex');
             
             const newSubwallets = [];
             
-            // Generate 100 HD wallets
             for (let i = 0; i < 100; i++) {
                 const seedBuffer = derivePath(`m/44'/501'/${i}'`, signatureBytes).key;
                 const keypair = Keypair.fromSeed(seedBuffer);
                 newSubwallets.push({
                     publicKey: keypair.publicKey.toString(),
-                    index: i
+                    privateKey: Buffer.from(keypair.secretKey).toString('hex'),
+                    index: i,
+                    isRevealed: false
                 });
             }
             
@@ -38,6 +45,22 @@ const SubwalletsPage: FC = () => {
             console.error('Error generating subwallets:', error);
         }
         setIsGenerating(false);
+    };
+
+    const toggleReveal = (index: number) => {
+        setSubwallets(prev => prev.map(wallet => 
+            wallet.index === index 
+                ? { ...wallet, isRevealed: !wallet.isRevealed }
+                : wallet
+        ));
+    };
+
+    const copyToClipboard = async (text: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+        }
     };
 
     return (
@@ -73,13 +96,52 @@ const SubwalletsPage: FC = () => {
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Index</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Public Key</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-700">
                                             {subwallets.map((wallet) => (
                                                 <tr key={wallet.index} className="hover:bg-gray-700">
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-300">{wallet.index}</td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">{wallet.publicKey}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-300">
+                                                        {wallet.index}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="truncate max-w-md">{wallet.publicKey}</span>
+                                                            <button
+                                                                onClick={() => copyToClipboard(wallet.publicKey)}
+                                                                className="text-gray-400 hover:text-white"
+                                                                title="Copy public key"
+                                                            >
+                                                                📋
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">
+                                                        <div className="flex items-center space-x-2">
+                                                            <button
+                                                                onClick={() => toggleReveal(wallet.index)}
+                                                                className="text-gray-400 hover:text-white mr-2"
+                                                                title={wallet.isRevealed ? "Hide private key" : "Reveal private key"}
+                                                            >
+                                                                {wallet.isRevealed ? '👁️' : '🔒'}
+                                                            </button>
+                                                            {wallet.isRevealed ? (
+                                                                <>
+                                                                    <span className="truncate max-w-md">{wallet.privateKey}</span>
+                                                                    <button
+                                                                        onClick={() => copyToClipboard(wallet.privateKey)}
+                                                                        className="text-gray-400 hover:text-white"
+                                                                        title="Copy private key"
+                                                                    >
+                                                                        📋
+                                                                    </button>
+                                                                </>
+                                                            ) : (
+                                                                <span className="text-gray-500">••••••••</span>
+                                                            )}
+                                                        </div>
+                                                    </td>
                                                 </tr>
                                             ))}
                                         </tbody>
