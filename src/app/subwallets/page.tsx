@@ -1116,31 +1116,52 @@ const SubwalletsPage: FC = () => {
                     </div>
 
                     <div className="flex flex-1 gap-4">
-                        <div className="flex gap-2 items-center">
-                            <input
-                                type="text"
-                                value={inputValue}
-                                onChange={(e) => setInputValue(e.target.value)}
-                                onKeyPress={handleKeyPress}
-                                placeholder="Enter DEXScreener URL or pool address"
-                                className="flex-1 bg-gray-700 rounded p-2 text-white"
-                            />
-                            {isLoadingToken ? (
-                                <span className="text-gray-400 animate-pulse">Loading...</span>
-                            ) : tokenInfo ? (
-                                <TokenInfoDisplay info={tokenInfo} />
-                            ) : inputValue && (
-                                <div className="bg-red-900/50 text-red-200 rounded-lg p-3">
-                                    Token not found
-                                </div>
-                            )}
+                        <div className="flex flex-col gap-2">
+                            <h2 className="text-lg font-semibold text-white">
+                                Sniper Target
+                            </h2>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={inputValue}
+                                    onChange={(e) => setInputValue(e.target.value)}
+                                    placeholder="Enter CA or URL"
+                                    className="flex-1 bg-gray-700 rounded p-2 text-white"
+                                />
+                                <button
+                                    onClick={handleEnter}
+                                    disabled={isLoadingToken || !inputValue.trim()}
+                                    className={`px-4 py-2 rounded font-semibold ${
+                                        isLoadingToken || !inputValue.trim()
+                                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                            : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                    }`}
+                                >
+                                    {isLoadingToken ? (
+                                        <span className="flex items-center gap-2">
+                                            <span className="animate-spin">⏳</span> Loading
+                                        </span>
+                                    ) : (
+                                        'Enter'
+                                    )}
+                                </button>
+                                <button
+                                    onClick={handleClear}
+                                    className="px-4 py-2 rounded font-semibold bg-red-600 hover:bg-red-700 text-white"
+                                >
+                                    Clear
+                                </button>
+                            </div>
                         </div>
-                        <button
-                            onClick={handleClear}
-                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 h-10 rounded"
-                        >
-                            Clear ↵
-                        </button>
+                        {isLoadingToken ? (
+                            <span className="text-gray-400 animate-pulse">Loading...</span>
+                        ) : tokenInfo ? (
+                            <TokenInfoDisplay info={tokenInfo} />
+                        ) : inputValue && (
+                            <div className="bg-red-900/50 text-red-200 rounded-lg p-3">
+                                Token not found
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
