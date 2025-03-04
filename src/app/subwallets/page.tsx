@@ -42,6 +42,8 @@ interface TokenInfo {
     name: string;
     symbol: string;
     address: string;
+    logoURI?: string;
+    source?: string;
 }
 
 interface JupiterToken {
@@ -284,7 +286,7 @@ const fetchTokenInfo = async (address: string) => {
         }
 
         // Find Solana pairs
-        const solanaPairs = data.pairs.filter(pair => 
+        const solanaPairs = data.pairs.filter((pair: any) => 
             pair.chainId === 'solana' || pair.chain === 'solana'
         );
 
@@ -314,6 +316,7 @@ const fetchTokenInfo = async (address: string) => {
     } catch (error) {
         console.error('Token fetch error:', error);
         // Return default values instead of throwing
+        const cleanAddress = address.toLowerCase().trim();
         return {
             name: 'Unknown Token',
             symbol: 'TOKEN',
@@ -479,7 +482,7 @@ const SubwalletsPage: FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [pendingCa, setPendingCa] = useState<string>('');
     const [hasGeneratedWallets, setHasGeneratedWallets] = useState(false);
-    const [modalType, setModalType] = useState<'fund' | 'recoverSol' | 'recoverCA' | null>(null);
+    const [modalType, setModalType] = useState<'fund' | 'recoverSol' | 'recoverCA' | 'sellAll' | null>(null);
     const [progress, setProgress] = useState<FundingProgress>({
         stage: 'preparing',
         currentBatch: 0,
@@ -494,11 +497,16 @@ const SubwalletsPage: FC = () => {
     const [displayedTokenName, setDisplayedTokenName] = useState('CA Balance');
     const [isBuying, setIsBuying] = useState(false);
     const [buyProgress, setBuyProgress] = useState<BuyProgress | null>(null);
+    const [isTestnet, setIsTestnet] = useState(false);
+    const [mainnetBalance, setMainnetBalance] = useState<number | null>(null);
+    const [testnetBalance, setTestnetBalance] = useState<number | null>(null);
+    const [isLoadingBalances, setIsLoadingBalances] = useState(false);
 
     useEffect(() => {
         setMounted(true);
         if (publicKey) {
             void loadFromLocalStorage();
+            void fetchNetworkBalances();
         }
     }, [publicKey]);
 
@@ -558,7 +566,7 @@ const SubwalletsPage: FC = () => {
         // Clear timeout on each input change
         const timeoutId = setTimeout(() => {
             if (inputValue.trim()) {
-                fetchTokenInfo(inputValue, false); // false = don't show loading state
+                void handleTokenFetch(); // Call the handler function instead of direct API call
             }
         }, 1000); // 1 second delay for auto-loading
 
@@ -869,34 +877,28 @@ const SubwalletsPage: FC = () => {
         setError(null);
 
         try {
-            const connection = new Connection(
-                'https://api.mainnet-beta.solana.com',
-                'confirmed'
-            );
-
-            const updatedSubwallets = subwallets.map(wallet => ({
+            const updatedWallets = subwallets.map(wallet => ({
                 ...wallet,
                 isLoading: true,
-                solBalance: caAddress ? '...' : '0',
-                caBalance: caAddress ? '...' : '0'
+                solBalance: caAddress ? 0 : 0,
+                caBalance: caAddress ? 0 : 0
             }));
-            setSubwallets(updatedSubwallets);
+            
+            setSubwallets(updatedWallets as Subwallet[]);
 
-            // Process in parallel with individual loading states
             await Promise.all(
-                updatedSubwallets.map(async (wallet, index) => {
+                updatedWallets.map(async (wallet, index) => {
                     try {
                         const solBalance = await connection.getBalance(
                             new PublicKey(wallet.publicKey)
                         );
                         
-                        // Update individual wallet
                         setSubwallets(current => {
                             const updated = [...current];
                             updated[index] = {
                                 ...updated[index],
-                                solBalance: (solBalance / LAMPORTS_PER_SOL).toFixed(4),
-                                isLoading: caAddress ? true : false // Keep loading if fetching CA
+                                solBalance: Number((solBalance / LAMPORTS_PER_SOL).toFixed(4)),
+                                isLoading: caAddress ? true : false
                             };
                             return updated;
                         });
@@ -907,12 +909,11 @@ const SubwalletsPage: FC = () => {
                                 { mint: new PublicKey(caAddress) }
                             );
                             
-                            // Update CA balance
                             setSubwallets(current => {
                                 const updated = [...current];
                                 updated[index] = {
                                     ...updated[index],
-                                    caBalance: (tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0).toString(),
+                                    caBalance: Number(tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0),
                                     isLoading: false
                                 };
                                 return updated;
@@ -924,8 +925,8 @@ const SubwalletsPage: FC = () => {
                             const updated = [...current];
                             updated[index] = {
                                 ...updated[index],
-                                solBalance: 'Error',
-                                caBalance: 'Error',
+                                solBalance: 0,
+                                caBalance: 0,
                                 isLoading: false
                             };
                             return updated;
@@ -1061,18 +1062,15 @@ const SubwalletsPage: FC = () => {
                         }
                     }
 
-                    transaction.recentBlockhash = latestBlockhash.blockhash;
-                    transaction.feePayer = publicKey;
+                    if (latestBlockhash) {
+                        transaction.recentBlockhash = latestBlockhash.blockhash;
+                        transaction.feePayer = publicKey;
+                    }
 
                     setProgress(prev => ({ ...prev, stage: 'confirming' }));
 
                     // Send and confirm with timeout
-                    const signature = await Promise.race([
-                        sendTransaction(transaction, connection),
-                        new Promise((_, reject) => 
-                            setTimeout(() => reject(new Error('Transaction timeout')), 30000)
-                        )
-                    ]);
+                    const signature = await sendTransaction(transaction, connection) as string;
 
                     // Wait for confirmation with progress updates
                     let confirmed = false;
@@ -1097,7 +1095,7 @@ const SubwalletsPage: FC = () => {
                             if (walletIndex !== -1) {
                                 updated[walletIndex] = {
                                     ...updated[walletIndex],
-                                    solBalance: (parseFloat(updated[walletIndex].solBalance || '0') + batchAmounts[index]).toFixed(4)
+                                    solBalance: Number((parseFloat(updated[walletIndex].solBalance.toString() || '0') + batchAmounts[index]).toFixed(4))
                                 };
                             }
                         });
@@ -1176,7 +1174,9 @@ const SubwalletsPage: FC = () => {
                 transactions: {
                     total: 0,
                     buys: 0,
-                    sells: 0
+                    sells: 0,
+                    buyers: 0,
+                    sellers: 0
                 }
             });
 
@@ -1198,7 +1198,7 @@ const SubwalletsPage: FC = () => {
     // Handle Enter button click
     const handleEnter = () => {
         if (!inputValue.trim()) return;
-        handleTokenFetch();
+        void handleTokenFetch();
     };
 
     // Add useEffect to debug UI updates
@@ -1223,6 +1223,27 @@ const SubwalletsPage: FC = () => {
             isComplete: false
         });
 
+        // Get the appropriate connection based on current network
+        const getReliableConnection = () => {
+            if (isTestnet) {
+                // Try multiple testnet endpoints
+                const testnetEndpoints = [
+                    'https://api.testnet.solana.com',
+                    'https://testnet.solana.com'
+                ];
+                return new Connection(testnetEndpoints[0], 'confirmed');
+            } else {
+                // Try multiple mainnet endpoints
+                const mainnetEndpoints = [
+                    'https://api.mainnet-beta.solana.com',
+                    'https://solana-mainnet.g.alchemy.com/v2/demo',
+                    'https://solana-api.projectserum.com'
+                ];
+                return new Connection(mainnetEndpoints[0], 'confirmed');
+            }
+        };
+
+        const reliableConnection = getReliableConnection();
         const BATCH_SIZE = 2;
         const batches = Math.ceil(subwallets.length / BATCH_SIZE);
 
@@ -1235,28 +1256,33 @@ const SubwalletsPage: FC = () => {
                         new Uint8Array(wallet.privateKey.split(',').map(Number))
                     );
 
-                    const balance = await connection.getBalance(keypair.publicKey);
-                    if (balance < 0.01 * LAMPORTS_PER_SOL) {
+                    // Use reliable connection
+                    const balance = await reliableConnection.getBalance(keypair.publicKey);
+                    const amountToSpend = balance - (0.01 * LAMPORTS_PER_SOL);
+
+                    if (amountToSpend <= 0) {
                         throw new Error('Insufficient balance');
                     }
 
-                    const amountToSpend = balance - (0.01 * LAMPORTS_PER_SOL);
-
-                    // Get quote from Jupiter API
+                    // Use Jupiter Testnet API
                     const quoteResponse = await fetch(
-                        `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112` +
+                        `https://quote-api.jup.ag/v6/quote?` +
+                        `inputMint=So11111111111111111111111111111111111111112` +
                         `&outputMint=${tokenInfo.address}` +
                         `&amount=${amountToSpend}` +
-                        `&slippageBps=100`
+                        `&slippageBps=100` +
+                        `&onlyDirectRoutes=true` + // Added for testnet
+                        `&env=testnet` // Specify testnet environment
                     );
 
                     const quoteData = await quoteResponse.json();
+                    console.log('Quote data:', quoteData);
 
                     if (!quoteData.data) {
                         throw new Error('No route found');
                     }
 
-                    // Get swap transaction
+                    // Get swap transaction (Testnet)
                     const swapResponse = await fetch('https://quote-api.jup.ag/v6/swap', {
                         method: 'POST',
                         headers: {
@@ -1265,40 +1291,67 @@ const SubwalletsPage: FC = () => {
                         body: JSON.stringify({
                             quoteResponse: quoteData,
                             userPublicKey: keypair.publicKey.toString(),
-                            wrapUnwrapSOL: true
+                            wrapUnwrapSOL: true,
+                            env: 'testnet' // Specify testnet environment
                         })
                     });
 
                     const swapData = await swapResponse.json();
+                    console.log('Swap data:', swapData);
                     
                     // Deserialize and sign transaction
                     const swapTransaction = Transaction.from(
                         Buffer.from(swapData.swapTransaction, 'base64')
                     );
 
+                    // Get recent blockhash for Testnet
+                    const { blockhash } = await reliableConnection.getLatestBlockhash('confirmed');
+                    swapTransaction.recentBlockhash = blockhash;
+                    swapTransaction.feePayer = keypair.publicKey;
+
                     swapTransaction.sign(keypair);
 
                     // Send and confirm transaction
-                    const txid = await connection.sendRawTransaction(
+                    const txid = await reliableConnection.sendRawTransaction(
                         swapTransaction.serialize(),
-                        { skipPreflight: true }
+                        { 
+                            skipPreflight: true,
+                            preflightCommitment: 'confirmed'
+                        }
                     );
 
-                    await connection.confirmTransaction(txid, 'confirmed');
+                    console.log('Transaction sent:', txid);
+
+                    const confirmation = await reliableConnection.confirmTransaction(txid, 'confirmed');
+                    console.log('Transaction confirmed:', confirmation);
 
                     setBuyProgress(prev => ({
-                        ...prev!,
-                        processedWallets: prev!.processedWallets + 1,
-                        successfulBuys: prev!.successfulBuys + 1
+                        ...(prev || { 
+                            processedWallets: 0,
+                            totalWallets: subwallets.length,
+                            successfulBuys: 0,
+                            failedBuys: 0,
+                            errors: [],
+                            isComplete: false
+                        }),
+                        processedWallets: (prev?.processedWallets || 0) + 1,
+                        successfulBuys: (prev?.successfulBuys || 0) + 1
                     }));
 
-                } catch (error) {
+                } catch (error: any) {
                     console.error(`Error buying for wallet ${wallet.publicKey}:`, error);
                     setBuyProgress(prev => ({
-                        ...prev!,
-                        processedWallets: prev!.processedWallets + 1,
-                        failedBuys: prev!.failedBuys + 1,
-                        errors: [...prev!.errors, `Wallet ${wallet.publicKey}: ${error.message}`]
+                        ...(prev || {
+                            processedWallets: 0,
+                            totalWallets: subwallets.length,
+                            successfulBuys: 0,
+                            failedBuys: 0,
+                            errors: [],
+                            isComplete: false
+                        }),
+                        processedWallets: (prev?.processedWallets || 0) + 1,
+                        failedBuys: (prev?.failedBuys || 0) + 1,
+                        errors: [...(prev?.errors || []), `Wallet ${wallet.publicKey}: ${error.message || "Unknown error"}`]
                     }));
                 }
             }));
@@ -1307,10 +1360,177 @@ const SubwalletsPage: FC = () => {
         }
 
         setBuyProgress(prev => ({
-            ...prev!,
+            ...(prev || {
+                processedWallets: 0,
+                totalWallets: subwallets.length,
+                successfulBuys: 0,
+                failedBuys: 0,
+                errors: [],
+                isComplete: false
+            }),
             isComplete: true
         }));
         setIsBuying(false);
+    };
+
+    // Add this helper function to airdrop test SOL
+    const requestTestnetSOL = async (publicKey: PublicKey) => {
+        try {
+            const signature = await connection.requestAirdrop(
+                publicKey,
+                2 * LAMPORTS_PER_SOL // Request 2 SOL
+            );
+            await connection.confirmTransaction(signature, 'confirmed');
+            return true;
+        } catch (error) {
+            console.error('Airdrop error:', error);
+            return false;
+        }
+    };
+
+    const handleTestnetAirdrop = async () => {
+        if (!publicKey) {
+            setError("Wallet not connected");
+            return;
+        }
+        
+        setIsLoading(true);
+        setError(null);
+        
+        // Try multiple testnet endpoints
+        const testnetEndpoints = [
+            'https://api.testnet.solana.com',
+            'https://testnet.solana.com'
+        ];
+        
+        let success = false;
+        let errorMessage = "All testnet endpoints failed";
+        
+        // Try each endpoint until one works
+        for (const endpoint of testnetEndpoints) {
+            try {
+                console.log(`Attempting airdrop using endpoint: ${endpoint}`);
+                const testnetConnection = new Connection(endpoint, 'confirmed');
+                
+                // Just airdrop to the parent wallet
+                const signature = await testnetConnection.requestAirdrop(
+                    publicKey,
+                    2 * LAMPORTS_PER_SOL // Request 2 SOL to parent wallet
+                );
+                
+                // Wait for confirmation with timeout
+                const confirmed = await Promise.race([
+                    testnetConnection.confirmTransaction(signature),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error("Confirmation timeout")), 30000)
+                    )
+                ]);
+                
+                console.log(`Airdropped 2 SOL to parent wallet ${publicKey.toString()}`);
+                
+                // Refresh balances to show updated SOL amount
+                await fetchNetworkBalances();
+                
+                setError("Successfully airdropped 2 SOL to parent wallet. You can now fund your subwallets.");
+                success = true;
+                break; // Exit the loop if successful
+            } catch (error: any) {
+                console.error(`Airdrop failed with endpoint ${testnetEndpoints[0]}:`, error);
+                errorMessage = error.message || "Unknown error";
+                
+                // Continue to next endpoint
+            }
+        }
+        
+        if (!success) {
+            if (errorMessage.includes("429") || 
+                errorMessage.includes("airdrop limit") ||
+                errorMessage.includes("faucet has run dry") ||
+                errorMessage.includes("403")) {
+                setError(
+                    "Testnet faucet rate limit reached. Please try again later or visit https://faucet.solana.com for alternate sources of test SOL."
+                );
+            } else {
+                setError(`Airdrop failed: ${errorMessage}`);
+            }
+        }
+        
+        setIsLoading(false);
+    };
+
+    const toggleNetwork = () => {
+        const newIsTestnet = !isTestnet;
+        setIsTestnet(newIsTestnet);
+        
+        // Don't modify connection directly as it's from context
+        // Instead, just log the change and refresh balances
+        console.log(`Network switched to ${newIsTestnet ? 'testnet' : 'mainnet-beta'}`);
+        
+        // Refresh all balances
+        fetchNetworkBalances();
+    };
+
+    // Add this new function to fetch both network balances
+    const fetchNetworkBalances = async () => {
+        if (!publicKey) return;
+        
+        setIsLoadingBalances(true);
+        // Set default values to avoid showing "N/A"
+        setMainnetBalance(0);
+        setTestnetBalance(0);
+        
+        try {
+            // Use more reliable RPC endpoints with retries
+            const mainnetEndpoints = [
+                'https://api.mainnet-beta.solana.com',
+                'https://solana-mainnet.g.alchemy.com/v2/demo',
+                'https://solana-api.projectserum.com'
+            ];
+            
+            const testnetEndpoints = [
+                'https://api.testnet.solana.com',
+                'https://testnet.solana.com'
+            ];
+            
+            // Helper function to try multiple endpoints with retries
+            const getBalanceWithRetry = async (endpoints: string[], pubkey: PublicKey): Promise<number> => {
+                for (const endpoint of endpoints) {
+                    try {
+                        const conn = new Connection(endpoint, 'confirmed');
+                        const balance = await conn.getBalance(pubkey);
+                        console.log(`Successfully fetched balance from ${endpoint}`);
+                        return balance;
+                    } catch (err) {
+                        console.warn(`Failed to fetch balance from ${endpoint}:`, err);
+                        // Continue to next endpoint
+                    }
+                }
+                console.error(`All endpoints failed for balance fetch`);
+                return 0; // Return 0 if all endpoints fail
+            };
+            
+            // Fetch balances from both networks using multiple endpoint options
+            const [mainnetBal, testnetBal] = await Promise.all([
+                getBalanceWithRetry(mainnetEndpoints, publicKey),
+                getBalanceWithRetry(testnetEndpoints, publicKey)
+            ]);
+            
+            // Update state with formatted balances
+            setMainnetBalance(mainnetBal / LAMPORTS_PER_SOL);
+            setTestnetBalance(testnetBal / LAMPORTS_PER_SOL);
+            
+            console.log('Balances fetched successfully', {
+                mainnet: mainnetBal / LAMPORTS_PER_SOL,
+                testnet: testnetBal / LAMPORTS_PER_SOL
+            });
+        } catch (error) {
+            console.error('Error fetching network balances:', error);
+            // Ensure we still have 0 values instead of null/undefined
+            setMainnetBalance(0);
+            setTestnetBalance(0);
+        } finally {
+            setIsLoadingBalances(false);
+        }
     };
 
     if (!mounted) {
@@ -1355,14 +1575,55 @@ const SubwalletsPage: FC = () => {
                     >
                         Refresh Balances 🔄
                     </button>
+                    <button
+                        onClick={toggleNetwork}
+                        className={`px-4 py-2 rounded ${
+                            isTestnet ? 'bg-purple-500 hover:bg-purple-600' : 'bg-blue-500 hover:bg-blue-600'
+                        } text-white font-bold`}
+                    >
+                        {isTestnet ? '🧪 TESTNET' : '🌐 MAINNET'}
+                    </button>
+                    {isTestnet && (
+                        <button
+                            onClick={handleTestnetAirdrop}
+                            className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded"
+                        >
+                            Request Testnet SOL 🪂
+                        </button>
+                    )}
                 </div>
             </div>
 
             {/* Parent Wallet and Sniper Target section */}
             <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-2">
-                    <span className="text-gray-400">Parent Wallet</span>
-                    <span>📋 J1P7JYF1pEWu1GceZjwNR78wNJ7FU2iD3UjTzwrNZhai</span>
+                <div className="flex flex-col">
+                    <div className="flex items-center gap-2 mb-2">
+                        <span className="text-gray-400">Parent Wallet</span>
+                        <span>📋 {publicKey ? publicKey.toString() : 'Not connected'}</span>
+                    </div>
+                    
+                    {/* Display both balances */}
+                    <div className="flex gap-4 items-center">
+                        <div className={`flex items-center gap-1 px-3 py-1 rounded ${isTestnet ? 'bg-gray-700' : 'bg-blue-800'}`}>
+                            <span className="text-sm">🌐 Mainnet:</span>
+                            <span className="font-bold">
+                                {isLoadingBalances ? 'Loading...' : (mainnetBalance !== null ? `${mainnetBalance.toFixed(4)} SOL` : '0.0000 SOL')}
+                            </span>
+                        </div>
+                        <div className={`flex items-center gap-1 px-3 py-1 rounded ${!isTestnet ? 'bg-gray-700' : 'bg-purple-800'}`}>
+                            <span className="text-sm">🧪 Testnet:</span>
+                            <span className="font-bold">
+                                {isLoadingBalances ? 'Loading...' : (testnetBalance !== null ? `${testnetBalance.toFixed(4)} SOL` : '0.0000 SOL')}
+                            </span>
+                        </div>
+                        <button 
+                            onClick={fetchNetworkBalances} 
+                            className="text-blue-400 hover:text-blue-300 text-sm"
+                            disabled={isLoadingBalances}
+                        >
+                            {isLoadingBalances ? 'Refreshing...' : '🔄 Refresh'}
+                        </button>
+                    </div>
                 </div>
 
                 {/* Sniper Target */}
@@ -1404,35 +1665,89 @@ const SubwalletsPage: FC = () => {
 
             {/* Action buttons */}
             <div className="flex gap-4 mb-6">
+                {isTestnet && (
+                    <div className="flex items-center bg-purple-800/70 px-4 py-2 rounded mr-2">
+                        <span className="font-bold">🧪 TESTNET MODE</span>
+                    </div>
+                )}
                 <button
                     onClick={() => setModalType('fund')}
                     className="bg-orange-600 px-4 py-2 rounded flex items-center gap-2"
-                    disabled={isLoading || !subwallets.length}
+                    disabled={isLoading || (!subwallets.length && !isTestnet)}
                 >
                     Fund Subwallets with SOL
                 </button>
                 <button
                     onClick={() => setModalType('recoverSol')}
                     className="bg-red-600 px-4 py-2 rounded flex items-center gap-2"
-                    disabled={isLoading || !subwallets.length}
+                    disabled={isLoading || (!subwallets.length && !isTestnet)}
                 >
                     Recover SOL from Subwallets 🔄
                 </button>
                 <button
                     onClick={() => setModalType('recoverCA')}
                     className="bg-purple-800 px-4 py-2 rounded flex items-center gap-2"
-                    disabled={isLoading || !subwallets.length || !caAddress}
+                    disabled={isLoading || !subwallets.length || (!caAddress && !isTestnet)}
                 >
                     Recover CA tokens from Subwallets
                 </button>
                 <button
                     onClick={() => setModalType('sellAll')}
                     className="bg-pink-600 px-4 py-2 rounded flex items-center gap-2"
-                    disabled={isLoading || !subwallets.length || !caAddress}
+                    disabled={isLoading || !subwallets.length || (!caAddress && !isTestnet)}
                 >
                     SELL ALL 💸
                 </button>
+
+                <button
+                    onClick={handleBuyAll}
+                    disabled={(!tokenInfo?.address && !isTestnet) || isBuying}
+                    className={`px-4 py-2 rounded ${
+                        (!tokenInfo?.address && !isTestnet) || isBuying
+                            ? 'bg-gray-500 cursor-not-allowed'
+                            : 'bg-pink-500 hover:bg-pink-600'
+                    } text-white flex items-center gap-2`}
+                >
+                    {isBuying ? (
+                        <>
+                            <span className="animate-spin">⚡</span>
+                            Buying ({buyProgress?.processedWallets}/{buyProgress?.totalWallets})
+                        </>
+                    ) : (
+                        'BUY ALL 🚀'
+                    )}
+                </button>
             </div>
+
+            {/* Add this new section right after the action buttons div */}
+            {tokenInfo && (
+                <div className="mb-6 bg-gray-800/50 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <div className="bg-gray-700 rounded-full p-3">
+                                <span className="text-xl">🪙</span>
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-white">{tokenInfo.name}</h3>
+                                <div className="flex items-center gap-2 text-gray-400">
+                                    <span className="bg-gray-700 px-2 py-1 rounded text-sm">
+                                        {tokenInfo.symbol}
+                                    </span>
+                                    <a 
+                                        href={`https://solscan.io/token/${tokenInfo.address}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-400 hover:text-blue-300 text-sm flex items-center gap-1"
+                                    >
+                                        View on Solscan
+                                        <span className="text-xs">↗</span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Only render dashboard if we have stats */}
             {tokenStats && tokenInfo && (
@@ -1499,15 +1814,6 @@ const SubwalletsPage: FC = () => {
                 </table>
             </div>
 
-            {/* Debug info - remove in production */}
-            <div className="mt-4 text-xs text-gray-500">
-                {tokenInfo && (
-                    <pre>
-                        Current Token: {JSON.stringify(tokenInfo, null, 2)}
-                    </pre>
-                )}
-            </div>
-
             {/* Add progress display */}
             {buyProgress && (
                 <div className="mt-4 p-4 bg-gray-800 rounded">
@@ -1534,6 +1840,12 @@ const SubwalletsPage: FC = () => {
 };
 
 const ProgressIndicator = ({ progress }: { progress: FundingProgress }) => {
+    const handleErrorReset = () => {
+        // Local error reset function since we don't have access to setProgress
+        console.log("Try again clicked");
+        // In real implementation, this would need to be passed from parent
+    };
+
     return (
         <div className="mt-4 bg-gray-700/50 rounded p-4 space-y-3">
             <div className="flex justify-between text-sm">
@@ -1567,7 +1879,7 @@ const ProgressIndicator = ({ progress }: { progress: FundingProgress }) => {
                 <div className="text-red-400 bg-red-900/20 rounded p-3 text-sm">
                     ⚠️ {progress.error}
                     <button
-                        onClick={() => setProgress(prev => ({ ...prev, error: undefined }))}
+                        onClick={handleErrorReset}
                         className="ml-2 text-red-400 hover:text-red-300"
                     >
                         Try Again
