@@ -12,6 +12,7 @@ import { FundModal } from '@/components/modals/FundModal';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { useConnection } from '@solana/wallet-adapter-react';
 import { NATIVE_MINT } from "@solana/spl-token";
+import { createAssociatedTokenAccountInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 
 // Dynamically import WalletMultiButton with ssr disabled
 const WalletMultiButtonDynamic = dynamic(
@@ -1128,13 +1129,247 @@ const SubwalletsPage: FC = () => {
     };
 
     const handleRecoverSol = async () => {
-        // Implementation coming soon
-        console.log('Recovering SOL');
+        if (!publicKey || !subwallets.length) {
+            setError('No wallet connected or no subwallets available');
+            return;
+        }
+
+        setIsProcessing(true);
+        setProgress({
+            stage: 'preparing',
+            currentBatch: 0,
+            totalBatches: 0,
+            processedWallets: 0,
+            totalWallets: subwallets.length
+        });
+
+        try {
+            // Process in batches of 2 to avoid rate limits
+            const BATCH_SIZE = 2;
+            const totalBatches = Math.ceil(subwallets.length / BATCH_SIZE);
+
+            setProgress(prev => ({
+                ...prev,
+                stage: 'processing',
+                totalBatches
+            }));
+
+            for (let i = 0; i < subwallets.length; i += BATCH_SIZE) {
+                const batch = subwallets.slice(i, i + BATCH_SIZE);
+                
+                await Promise.all(batch.map(async (wallet) => {
+                    try {
+                        // Get wallet's current balance
+                        const keypair = Keypair.fromSecretKey(
+                            new Uint8Array(wallet.privateKey.split(',').map(Number))
+                        );
+                        
+                        const balance = await connection.getBalance(keypair.publicKey);
+                        
+                        // Skip if balance is too low (less than 0.01 SOL)
+                        if (balance < 0.01 * LAMPORTS_PER_SOL) {
+                            return;
+                        }
+
+                        // Calculate amount to recover (leave 0.01 SOL for fees)
+                        const amountToRecover = balance - (0.01 * LAMPORTS_PER_SOL);
+                        
+                        // Create and send transaction
+                        const transaction = new Transaction().add(
+                            SystemProgram.transfer({
+                                fromPubkey: keypair.publicKey,
+                                toPubkey: publicKey,
+                                lamports: amountToRecover
+                            })
+                        );
+
+                        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                        transaction.recentBlockhash = blockhash;
+                        transaction.feePayer = keypair.publicKey;
+                        
+                        transaction.sign(keypair);
+                        
+                        const signature = await connection.sendRawTransaction(
+                            transaction.serialize(),
+                            { maxRetries: 5 }
+                        );
+                        
+                        await connection.confirmTransaction(signature, 'confirmed');
+                        
+                        // Update wallet balance in state
+                        setSubwallets(current => {
+                            const updated = [...current];
+                            const index = updated.findIndex(w => w.publicKey === wallet.publicKey);
+                            if (index !== -1) {
+                                updated[index] = {
+                                    ...updated[index],
+                                    solBalance: 0.01 // Leave 0.01 SOL
+                                };
+                            }
+                            return updated;
+                        });
+
+                    } catch (error) {
+                        console.error(`Failed to recover SOL from wallet ${wallet.publicKey}:`, error);
+                    }
+                }));
+
+                setProgress(prev => ({
+                    ...prev,
+                    currentBatch: Math.floor(i / BATCH_SIZE) + 1,
+                    processedWallets: Math.min(i + BATCH_SIZE, subwallets.length)
+                }));
+
+                // Add delay between batches
+                if (i + BATCH_SIZE < subwallets.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+
+            // Refresh parent wallet balance
+            await fetchNetworkBalances();
+            
+            setProgress(prev => ({ ...prev, stage: 'complete' }));
+            setTimeout(() => setModalType(null), 2000);
+
+        } catch (error: any) {
+            console.error('Recovery failed:', error);
+            setProgress(prev => ({ 
+                ...prev, 
+                error: error.message || 'Failed to recover SOL' 
+            }));
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
     const handleRecoverCA = async () => {
-        // Implementation coming soon
-        console.log('Recovering CA tokens');
+        if (!publicKey || !subwallets.length || !tokenInfo?.address) {
+            setError('No wallet connected, no subwallets available, or no token selected');
+            return;
+        }
+
+        setIsProcessing(true);
+        setProgress({
+            stage: 'preparing',
+            currentBatch: 0,
+            totalBatches: 0,
+            processedWallets: 0,
+            totalWallets: subwallets.length
+        });
+
+        try {
+            const BATCH_SIZE = 2;
+            const totalBatches = Math.ceil(subwallets.length / BATCH_SIZE);
+
+            setProgress(prev => ({
+                ...prev,
+                stage: 'processing',
+                totalBatches
+            }));
+
+            for (let i = 0; i < subwallets.length; i += BATCH_SIZE) {
+                const batch = subwallets.slice(i, i + BATCH_SIZE);
+                
+                await Promise.all(batch.map(async (wallet) => {
+                    try {
+                        const keypair = Keypair.fromSecretKey(
+                            new Uint8Array(wallet.privateKey.split(',').map(Number))
+                        );
+                        
+                        // Get token accounts
+                        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+                            keypair.publicKey,
+                            { mint: new PublicKey(tokenInfo.address) }
+                        );
+
+                        if (tokenAccounts.value.length === 0) {
+                            return; // No tokens to recover
+                        }
+
+                        const tokenAccount = tokenAccounts.value[0];
+                        const tokenAmount = tokenAccount.account.data.parsed.info.tokenAmount;
+
+                        if (tokenAmount.uiAmount <= 0) {
+                            return; // No balance to recover
+                        }
+
+                        // Create ATA for parent wallet if it doesn't exist
+                        const parentATA = await connection.getParsedTokenAccountsByOwner(
+                            publicKey,
+                            { mint: new PublicKey(tokenInfo.address) }
+                        );
+
+                        // Transfer tokens
+                        const transaction = new Transaction();
+                        
+                        // Add create ATA instruction if needed
+                        if (parentATA.value.length === 0) {
+                            const createAtaInstruction = await createAssociatedTokenAccountInstruction(
+                                keypair.publicKey,
+                                publicKey,
+                                new PublicKey(tokenInfo.address)
+                            );
+                            transaction.add(createAtaInstruction);
+                        }
+
+                        // Add transfer instruction
+                        const transferInstruction = createTransferInstruction(
+                            tokenAccount.pubkey,
+                            parentATA.value[0]?.pubkey || await getAssociatedTokenAddress(
+                                new PublicKey(tokenInfo.address),
+                                publicKey
+                            ),
+                            keypair.publicKey,
+                            BigInt(tokenAmount.amount)
+                        );
+                        
+                        transaction.add(transferInstruction);
+
+                        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                        transaction.recentBlockhash = blockhash;
+                        transaction.feePayer = keypair.publicKey;
+                        
+                        transaction.sign(keypair);
+                        
+                        const signature = await connection.sendRawTransaction(
+                            transaction.serialize(),
+                            { maxRetries: 5 }
+                        );
+                        
+                        await connection.confirmTransaction(signature, 'confirmed');
+
+                    } catch (error) {
+                        console.error(`Failed to recover tokens from wallet ${wallet.publicKey}:`, error);
+                    }
+                }));
+
+                setProgress(prev => ({
+                    ...prev,
+                    currentBatch: Math.floor(i / BATCH_SIZE) + 1,
+                    processedWallets: Math.min(i + BATCH_SIZE, subwallets.length)
+                }));
+
+                if (i + BATCH_SIZE < subwallets.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+
+            // Refresh balances after recovery
+            await fetchBalances(subwallets);
+            
+            setProgress(prev => ({ ...prev, stage: 'complete' }));
+            setTimeout(() => setModalType(null), 2000);
+
+        } catch (error: any) {
+            console.error('Token recovery failed:', error);
+            setProgress(prev => ({ 
+                ...prev, 
+                error: error.message || 'Failed to recover tokens' 
+            }));
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
     const handleSellAll = async () => {
@@ -1465,12 +1700,10 @@ const SubwalletsPage: FC = () => {
         if (!publicKey) return;
         
         setIsLoadingBalances(true);
-        // Set default values to avoid showing "N/A"
         setMainnetBalance(0);
         setTestnetBalance(0);
         
         try {
-            // Use more reliable RPC endpoints with retries
             const mainnetEndpoints = [
                 'https://api.mainnet-beta.solana.com',
                 'https://solana-mainnet.g.alchemy.com/v2/demo',
@@ -1482,40 +1715,46 @@ const SubwalletsPage: FC = () => {
                 'https://testnet.solana.com'
             ];
             
-            // Helper function to try multiple endpoints with retries
-            const getBalanceWithRetry = async (endpoints: string[], pubkey: PublicKey): Promise<number> => {
-                for (const endpoint of endpoints) {
-                    try {
-                        const conn = new Connection(endpoint, 'confirmed');
-                        const balance = await conn.getBalance(pubkey);
-                        console.log(`Successfully fetched balance from ${endpoint}`);
-                        return balance;
-                    } catch (err) {
-                        console.warn(`Failed to fetch balance from ${endpoint}:`, err);
-                        // Continue to next endpoint
+            // Add timeout to balance fetching
+            const fetchWithTimeout = async (endpoints: string[], pubkey: PublicKey): Promise<number> => {
+                const timeout = new Promise<number>((_, reject) => 
+                    setTimeout(() => reject(new Error('Timeout')), 10000)
+                );
+
+                const getBalance = async (): Promise<number> => {
+                    for (const endpoint of endpoints) {
+                        try {
+                            const conn = new Connection(endpoint, 'confirmed');
+                            const balance = await conn.getBalance(pubkey);
+                            console.log(`Successfully fetched balance from ${endpoint}`);
+                            return balance;
+                        } catch (err) {
+                            console.warn(`Failed to fetch balance from ${endpoint}:`, err);
+                            continue;
+                        }
                     }
+                    throw new Error('All endpoints failed');
+                };
+
+                try {
+                    return await Promise.race([getBalance(), timeout]);
+                } catch (error) {
+                    console.error('Balance fetch failed:', error);
+                    return 0;
                 }
-                console.error(`All endpoints failed for balance fetch`);
-                return 0; // Return 0 if all endpoints fail
             };
             
-            // Fetch balances from both networks using multiple endpoint options
+            // Fetch both balances concurrently with timeout
             const [mainnetBal, testnetBal] = await Promise.all([
-                getBalanceWithRetry(mainnetEndpoints, publicKey),
-                getBalanceWithRetry(testnetEndpoints, publicKey)
+                fetchWithTimeout(mainnetEndpoints, publicKey),
+                fetchWithTimeout(testnetEndpoints, publicKey)
             ]);
             
-            // Update state with formatted balances
             setMainnetBalance(mainnetBal / LAMPORTS_PER_SOL);
             setTestnetBalance(testnetBal / LAMPORTS_PER_SOL);
             
-            console.log('Balances fetched successfully', {
-                mainnet: mainnetBal / LAMPORTS_PER_SOL,
-                testnet: testnetBal / LAMPORTS_PER_SOL
-            });
         } catch (error) {
             console.error('Error fetching network balances:', error);
-            // Ensure we still have 0 values instead of null/undefined
             setMainnetBalance(0);
             setTestnetBalance(0);
         } finally {
@@ -1828,13 +2067,95 @@ const SubwalletsPage: FC = () => {
 
             {/* Conditional rendering for modals */}
             {modalType === 'fund' && (
-                <FundModal onClose={() => setModalType(null)} />
+                <FundModal 
+                    isOpen={modalType === 'fund'}
+                    onClose={() => setModalType(null)}
+                    onConfirm={handleFundSubwallets}
+                    totalSubwallets={subwallets.length}
+                    subwallets={subwallets}
+                />
             )}
 
-            {['recoverSol', 'recoverCA', 'sellAll'].includes(modalType || '') && (
+            {modalType === 'recoverSol' && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center">
+                    <div className="bg-gray-800 p-6 rounded-lg max-w-lg w-full">
+                        <h2 className="text-xl font-bold mb-4">Recover SOL from Subwallets</h2>
+                        
+                        {!isProcessing ? (
+                            <>
+                                <p className="text-gray-300 mb-4">
+                                    This will recover SOL from all subwallets, leaving 0.01 SOL in each for fees.
+                                    The recovered SOL will be sent to your parent wallet.
+                                </p>
+                                <div className="flex justify-end gap-4">
+                                    <button
+                                        onClick={() => setModalType(null)}
+                                        className="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleRecoverSol}
+                                        className="px-4 py-2 bg-red-600 rounded hover:bg-red-700"
+                                    >
+                                        Recover SOL
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <ProgressIndicator progress={progress} />
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {modalType === 'recoverCA' && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center">
+                    <div className="bg-gray-800 p-6 rounded-lg max-w-lg w-full">
+                        <h2 className="text-xl font-bold mb-4">Recover {tokenInfo?.symbol || 'CA'} Tokens from Subwallets</h2>
+                        
+                        {!isProcessing ? (
+                            <>
+                                <p className="text-gray-300 mb-4">
+                                    This will recover all {tokenInfo?.symbol || 'CA'} tokens from your subwallets and send them to your parent wallet.
+                                    Make sure you have selected the correct token before proceeding.
+                                </p>
+                                <div className="bg-yellow-900/20 text-yellow-400 p-3 rounded mb-4">
+                                    <p>Selected Token: {tokenInfo?.name || 'None'}</p>
+                                    <p>Symbol: {tokenInfo?.symbol || 'N/A'}</p>
+                                    <p className="text-xs">Address: {tokenInfo?.address || 'N/A'}</p>
+                                </div>
+                                <div className="flex justify-end gap-4">
+                                    <button
+                                        onClick={() => setModalType(null)}
+                                        className="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleRecoverCA}
+                                        className="px-4 py-2 bg-purple-600 rounded hover:bg-purple-700"
+                                        disabled={!tokenInfo?.address}
+                                    >
+                                        Recover Tokens
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <ProgressIndicator progress={progress} />
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {modalType === 'sellAll' && (
                 <ActionModal 
-                    type={modalType as ActionType} 
-                    onClose={() => setModalType(null)} 
+                    isOpen={true}
+                    onClose={() => setModalType(null)}
+                    onConfirm={handleSellAll}
+                    action="sellAll"
+                    totalSubwallets={subwallets.length}
+                    subwallets={subwallets}
                 />
             )}
         </div>
