@@ -41,45 +41,45 @@ const SubwalletsPage: FC = () => {
     };
 
     return (
-        <div className="container mx-auto px-4 py-8">
-            <h1 className="text-4xl font-bold mb-8">Subwallets Generator</h1>
+        <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
+            <h1 className="text-4xl font-bold mb-8 text-white">Subwallets Generator</h1>
             
             <div className="mb-8">
-                <WalletMultiButton className="!bg-blue-600 hover:!bg-blue-700" />
+                <WalletMultiButton className="!bg-purple-600 hover:!bg-purple-700" />
             </div>
 
             {publicKey ? (
                 <div className="space-y-6">
-                    <div className="bg-gray-100 p-4 rounded-lg">
-                        <p className="text-gray-700">Connected Wallet (Parent):</p>
-                        <p className="font-mono break-all">{publicKey.toString()}</p>
+                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                        <p className="text-gray-300">Connected Wallet (Parent):</p>
+                        <p className="font-mono break-all text-white">{publicKey.toString()}</p>
                     </div>
 
                     <button
                         onClick={generateSubwallets}
                         disabled={isGenerating}
-                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
                     </button>
 
                     {subwallets.length > 0 && (
                         <div className="mt-8">
-                            <h2 className="text-2xl font-bold mb-4">Generated Subwallets</h2>
-                            <div className="bg-white shadow rounded-lg overflow-hidden">
+                            <h2 className="text-2xl font-bold mb-4 text-white">Generated Subwallets</h2>
+                            <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
                                 <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-gray-200">
-                                        <thead className="bg-gray-50">
+                                    <table className="min-w-full divide-y divide-gray-700">
+                                        <thead className="bg-gray-900">
                                             <tr>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Index</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Public Key</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Index</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Public Key</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="bg-white divide-y divide-gray-200">
+                                        <tbody className="divide-y divide-gray-700">
                                             {subwallets.map((wallet) => (
-                                                <tr key={wallet.index}>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{wallet.index}</td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500">{wallet.publicKey}</td>
+                                                <tr key={wallet.index} className="hover:bg-gray-700">
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-300">{wallet.index}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">{wallet.publicKey}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -90,8 +90,8 @@ const SubwalletsPage: FC = () => {
                     )}
                 </div>
             ) : (
-                <div className="text-center py-12">
-                    <p className="text-xl text-gray-600">Please connect your Phantom wallet to continue</p>
+                <div className="text-center py-12 bg-gray-800 rounded-lg">
+                    <p className="text-xl text-gray-300">Please connect your Phantom wallet to continue</p>
                 </div>
             )}
         </div>
