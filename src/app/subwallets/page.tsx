@@ -379,21 +379,11 @@ const SubwalletsPage: FC = () => {
 
     return (
         <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-                {publicKey ? (
-                    <div className="flex items-center space-x-4 flex-wrap gap-y-4">
-                        <div className="flex items-center space-x-2">
-                            <span className="text-gray-400">Connected:</span>
-                            <span className="font-mono">{truncateKey(publicKey.toString())}</span>
-                            <button
-                                onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
-                                className="text-gray-400 hover:text-white transition-colors"
-                                title="Copy public key"
-                            >
-                                {isCopied(-1, 'public') ? '✓' : '📋'}
-                            </button>
-                        </div>
+            <div className="flex flex-wrap items-center gap-4 mb-8">
+                <WalletMultiButton />
 
+                {publicKey && (
+                    <div className="flex items-center space-x-4 flex-wrap gap-y-4">
                         {hasGeneratedWallets ? (
                             <>
                                 <div className="bg-gray-800 px-4 py-2 rounded-lg">
@@ -436,13 +426,7 @@ const SubwalletsPage: FC = () => {
                             </button>
                         )}
                     </div>
-                ) : (
-                    <div className="text-gray-400">
-                        Connect your wallet to manage subwallets
-                    </div>
                 )}
-                
-                <WalletMultiButton />
             </div>
 
             {error && (
