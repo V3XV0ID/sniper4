@@ -423,6 +423,26 @@ const SubwalletsPage: FC = () => {
         return `${first4}...${last4}`;
     };
 
+    const fundSubwallets = async () => {
+        // Implementation for funding subwallets
+        console.log('Funding subwallets...');
+    };
+
+    const recoverSOL = async () => {
+        // Implementation for recovering SOL
+        console.log('Recovering SOL...');
+    };
+
+    const recoverCA = async () => {
+        // Implementation for recovering CA tokens
+        console.log('Recovering CA tokens...');
+    };
+
+    const sellAll = async () => {
+        // Implementation for selling all tokens
+        console.log('Selling all tokens...');
+    };
+
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
@@ -525,6 +545,43 @@ const SubwalletsPage: FC = () => {
                             Enter ↵
                         </button>
                     </div>
+                </div>
+            )}
+
+            {publicKey && hasGeneratedWallets && (
+                <div className="flex gap-4 mb-8">
+                    <button
+                        onClick={() => void fundSubwallets()}
+                        disabled={isLoading || !subwallets.length}
+                        className="bg-yellow-600 hover:bg-yellow-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    >
+                        <span>Fund Subwallets with SOL</span>
+                        <span>💰</span>
+                    </button>
+                    <button
+                        onClick={() => void recoverSOL()}
+                        disabled={isLoading || !subwallets.length}
+                        className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    >
+                        <span>Recover SOL from Subwallets</span>
+                        <span>🔄</span>
+                    </button>
+                    <button
+                        onClick={() => void recoverCA()}
+                        disabled={isLoading || !subwallets.length || !caAddress}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    >
+                        <span>Recover CA tokens from Subwallets</span>
+                        <span>🔄</span>
+                    </button>
+                    <button
+                        onClick={() => void sellAll()}
+                        disabled={isLoading || !subwallets.length || !caAddress}
+                        className="bg-pink-600 hover:bg-pink-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    >
+                        <span>SELL ALL</span>
+                        <span>💸</span>
+                    </button>
                 </div>
             )}
 
