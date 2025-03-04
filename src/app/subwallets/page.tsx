@@ -434,12 +434,12 @@ const SubwalletsPage: FC = () => {
     return (
         <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
             <div className="flex flex-wrap items-center gap-4 mb-8">
-                <WalletMultiButton />
+                <WalletMultiButton className="h-10" />
                 {publicKey && (
                     <div className="flex items-center space-x-4 flex-wrap gap-y-4">
                         {hasGeneratedWallets ? (
                             <>
-                                <div className="bg-gray-800 px-4 py-2 rounded-lg">
+                                <div className="bg-gray-800 px-4 h-10 flex items-center rounded-lg">
                                     <p className="text-gray-300">
                                         Subwallets already generated
                                     </p>
@@ -447,7 +447,7 @@ const SubwalletsPage: FC = () => {
                                 <button
                                     onClick={downloadSubwallets}
                                     disabled={isLoading || !subwallets.length}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                                 >
                                     <span>Download Subwallets</span>
                                     <span>📥</span>
@@ -455,14 +455,14 @@ const SubwalletsPage: FC = () => {
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
                                     disabled={isLoading}
-                                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     Restore Subwallets
                                 </button>
                                 <button
                                     onClick={() => void refreshBalances()}
                                     disabled={isLoading || !subwallets.length}
-                                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                                    className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                                 >
                                     <span>Refresh Balances</span>
                                     <span>🔄</span>
@@ -479,7 +479,7 @@ const SubwalletsPage: FC = () => {
                             <button
                                 onClick={generateSubwallets}
                                 disabled={isLoading || isGenerating}
-                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
                             </button>
@@ -495,34 +495,32 @@ const SubwalletsPage: FC = () => {
             )}
 
             {publicKey && (
-                <div className="flex gap-4 mb-6 items-start">
-                    <div className="bg-gray-800 rounded-lg p-4 w-1/2">
-                        <div className="flex items-center space-x-4">
-                            <span className="text-gray-400">Parent Wallet</span>
-                            <div className="flex items-center space-x-2 overflow-hidden">
-                                <button
-                                    onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
-                                    className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
-                                    title="Copy public key"
-                                >
-                                    {isCopied(-1, 'public') ? '✓' : '📋'}
-                                </button>
-                                <span className="font-mono truncate">{publicKey.toString()}</span>
-                            </div>
+                <div className="flex gap-4 mb-8">
+                    <div className="bg-gray-800 rounded-lg w-1/2 h-10 flex items-center px-4">
+                        <span className="text-gray-400 mr-4">Parent Wallet</span>
+                        <div className="flex items-center space-x-2 overflow-hidden">
+                            <button
+                                onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
+                                className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
+                                title="Copy public key"
+                            >
+                                {isCopied(-1, 'public') ? '✓' : '📋'}
+                            </button>
+                            <span className="font-mono truncate">{publicKey.toString()}</span>
                         </div>
                     </div>
 
-                    <div className="flex-1 flex gap-4">
+                    <div className="flex flex-1 gap-4">
                         <input
                             type="text"
                             placeholder="Enter CA Address (optional)"
                             value={caAddress}
                             onChange={(e) => setCaAddress(e.target.value)}
-                            className="flex-1 bg-gray-800 text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="flex-1 bg-gray-800 text-white px-4 h-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                         />
                         <button
                             onClick={() => setCaAddress('')}
-                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded"
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 h-10 rounded"
                         >
                             Enter ↵
                         </button>
