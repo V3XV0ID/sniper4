@@ -20,6 +20,8 @@ const SubwalletsPage: FC = () => {
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [copiedType, setCopiedType] = useState<'public' | 'private' | null>(null);
 
+    const truncateKey = (key: string) => `${key.slice(0, 12)}...`;
+
     const generateSubwallets = async () => {
         if (!publicKey || !signMessage) return;
 
@@ -88,7 +90,7 @@ const SubwalletsPage: FC = () => {
                     <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
                         <p className="text-gray-300">Connected Wallet (Parent):</p>
                         <div className="flex items-center space-x-2 mt-1">
-                            <p className="font-mono break-all text-white">{publicKey.toString()}</p>
+                            <p className="font-mono text-white">{truncateKey(publicKey.toString())}</p>
                             <button
                                 onClick={() => copyToClipboard(publicKey.toString(), -1, 'public')}
                                 className="text-gray-400 hover:text-white transition-colors"
@@ -128,7 +130,7 @@ const SubwalletsPage: FC = () => {
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">
                                                         <div className="flex items-center space-x-2">
-                                                            <span className="truncate max-w-md">{wallet.publicKey}</span>
+                                                            <span>{truncateKey(wallet.publicKey)}</span>
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
