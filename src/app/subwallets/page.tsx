@@ -3,9 +3,16 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { FC, useState, useEffect } from 'react';
-import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } from '@solana/web3.js';
 import { derivePath } from 'ed25519-hd-key';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import dynamic from 'next/dynamic';
+
+// Dynamically import WalletMultiButton with ssr disabled
+const WalletMultiButtonDynamic = dynamic(
+    () => import('@solana/wallet-adapter-react-ui').then(mod => mod.WalletMultiButton),
+    { ssr: false }
+);
 
 interface Subwallet {
     publicKey: string;
@@ -18,52 +25,87 @@ interface Subwallet {
 
 const SubwalletsPage: FC = () => {
     const { publicKey, signMessage } = useWallet();
+    const [mounted, setMounted] = useState(false);
     const [subwallets, setSubwallets] = useState<Subwallet[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [copiedType, setCopiedType] = useState<'public' | 'private' | null>(null);
-    const [connection] = useState(new Connection('https://api.mainnet-beta.solana.com'));
-    const [caAddress, setCaAddress] = useState<string>(''); // Add input for CA address
+    const [connection] = useState(new Connection(clusterApiUrl('devnet'), 'confirmed'));
+    const [caAddress, setCaAddress] = useState<string>('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     const truncateKey = (key: string) => `${key.slice(0, 12)}...`;
     const formatBalance = (balance: number) => balance.toFixed(4);
 
-    const fetchBalances = async (wallets: Subwallet[]) => {
-        const updatedWallets = [...wallets];
-        
-        for (const wallet of updatedWallets) {
+    const fetchBalanceWithRetry = async (pubKey: string, retries = 3): Promise<number> => {
+        for (let i = 0; i < retries; i++) {
             try {
-                // Fetch SOL balance
-                const solBalance = await connection.getBalance(new PublicKey(wallet.publicKey));
-                wallet.solBalance = solBalance / LAMPORTS_PER_SOL;
-
-                // Fetch CA balance if address is provided
-                if (caAddress) {
-                    try {
-                        const tokenAccount = await connection.getParsedTokenAccountsByOwner(
-                            new PublicKey(wallet.publicKey),
-                            { programId: TOKEN_PROGRAM_ID }
-                        );
-                        
-                        const caAccountInfo = tokenAccount.value.find(
-                            (acc) => acc.account.data.parsed.info.mint === caAddress
-                        );
-
-                        wallet.caBalance = caAccountInfo 
-                            ? Number(caAccountInfo.account.data.parsed.info.tokenAmount.uiAmount)
-                            : 0;
-                    } catch (error) {
-                        wallet.caBalance = 0;
-                    }
-                }
+                const balance = await connection.getBalance(new PublicKey(pubKey));
+                return balance;
             } catch (error) {
-                console.error(`Error fetching balances for wallet ${wallet.index}:`, error);
-                wallet.solBalance = 0;
-                wallet.caBalance = 0;
+                if (i === retries - 1) throw error;
+                await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
             }
         }
+        return 0;
+    };
 
-        setSubwallets(updatedWallets);
+    const fetchBalances = async (wallets: Subwallet[]) => {
+        setIsLoading(true);
+        setError(null);
+        const updatedWallets = [...wallets];
+        const batchSize = 5;
+        
+        for (let i = 0; i < updatedWallets.length; i += batchSize) {
+            const batch = updatedWallets.slice(i, i + batchSize);
+            await Promise.all(
+                batch.map(async (wallet) => {
+                    try {
+                        const solBalance = await fetchBalanceWithRetry(wallet.publicKey);
+                        wallet.solBalance = solBalance / LAMPORTS_PER_SOL;
+
+                        if (caAddress) {
+                            try {
+                                const tokenAccount = await connection.getParsedTokenAccountsByOwner(
+                                    new PublicKey(wallet.publicKey),
+                                    { programId: TOKEN_PROGRAM_ID }
+                                );
+                                
+                                const caAccountInfo = tokenAccount.value.find(
+                                    (acc) => acc.account.data.parsed.info.mint === caAddress
+                                );
+
+                                wallet.caBalance = caAccountInfo 
+                                    ? Number(caAccountInfo.account.data.parsed.info.tokenAmount.uiAmount)
+                                    : 0;
+                            } catch (error) {
+                                console.warn(`Failed to fetch CA balance for wallet ${wallet.index}:`, error);
+                                wallet.caBalance = 0;
+                            }
+                        }
+                    } catch (error) {
+                        console.warn(`Failed to fetch balances for wallet ${wallet.index}:`, error);
+                        wallet.solBalance = 0;
+                        wallet.caBalance = 0;
+                    }
+                })
+            );
+            
+            // Update state after each batch
+            setSubwallets([...updatedWallets]);
+            
+            // Add delay between batches to avoid rate limits
+            if (i + batchSize < updatedWallets.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        
+        setIsLoading(false);
     };
 
     const generateSubwallets = async () => {
@@ -124,13 +166,32 @@ const SubwalletsPage: FC = () => {
         return copiedIndex === index && copiedType === type;
     };
 
+    if (!mounted) {
+        return (
+            <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
+                <h1 className="text-4xl font-bold mb-8 text-white">Subwallets Generator</h1>
+                <div className="mb-8">
+                    <div className="!bg-purple-600 hover:!bg-purple-700 h-10 px-4 rounded cursor-wait">
+                        Loading...
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
             <h1 className="text-4xl font-bold mb-8 text-white">Subwallets Generator</h1>
             
             <div className="mb-8">
-                <WalletMultiButton className="!bg-purple-600 hover:!bg-purple-700" />
+                <WalletMultiButtonDynamic className="!bg-purple-600 hover:!bg-purple-700" />
             </div>
+
+            {error && (
+                <div className="bg-red-900/50 border border-red-500 text-red-100 px-4 py-2 rounded-lg mb-4">
+                    {error}
+                </div>
+            )}
 
             {publicKey ? (
                 <div className="space-y-6">
@@ -170,9 +231,10 @@ const SubwalletsPage: FC = () => {
                         {subwallets.length > 0 && (
                             <button
                                 onClick={() => fetchBalances(subwallets)}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+                                disabled={isLoading}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                Refresh Balances
+                                {isLoading ? 'Refreshing...' : 'Refresh Balances'}
                             </button>
                         )}
                     </div>
