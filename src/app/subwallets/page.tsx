@@ -40,11 +40,7 @@ interface FundingProgress {
 interface TokenInfo {
     name: string;
     symbol: string;
-    decimals: number;
-    address?: string;
-    logoURI?: string;
-    source: string;
-    pairAddress?: string;
+    address: string;
 }
 
 interface JupiterToken {
@@ -64,6 +60,33 @@ interface TokenListItem {
     symbol: string;
     decimals: number;
     logoURI?: string;
+}
+
+interface TokenStats {
+    price?: {
+        usd: number;
+        sol: number;
+    };
+    changes?: {
+        m5: number;
+        h1: number;
+        h6: number;
+        h24: number;
+    };
+    volume?: {
+        usd: number;
+        buys: number;
+        sells: number;
+        buyVolume: number;
+        sellVolume: number;
+    };
+    transactions?: {
+        total: number;
+        buys: number;
+        sells: number;
+        buyers: number;
+        sellers: number;
+    };
 }
 
 // Cache object for token information
@@ -108,8 +131,7 @@ async function getOnChainTokenInfo(
                 return {
                     name: metadataData.data.name || 'Unknown',
                     symbol: metadataData.data.symbol || '???',
-                    decimals,
-                    source: 'On-chain',
+                    address: mintPubkey.toString(),
                 };
             }
         } catch (e) {
@@ -119,8 +141,7 @@ async function getOnChainTokenInfo(
         return {
             name: 'Unknown Token',
             symbol: '???',
-            decimals,
-            source: 'On-chain Mint',
+            address: mintPubkey.toString(),
         };
     } catch (error) {
         console.error('Error fetching on-chain data:', error);
@@ -194,28 +215,26 @@ function TokenInfoDisplay({ info }: { info: TokenInfo }) {
     );
 }
 
-// Function to extract token address from various URLs or direct input
-function extractTokenAddress(input: string): string | null {
+// Function to extract pool/token address
+const extractAddress = (input: string): string | null => {
     try {
+        // Handle DEXScreener URL
+        if (input.includes('dexscreener.com')) {
+            const parts = input.split('/');
+            return parts[parts.length - 1];
+        }
         // Handle Solscan URL
-        if (input.includes('solscan.io/token/')) {
+        if (input.includes('solscan.io')) {
             const parts = input.split('/token/');
             return parts[parts.length - 1];
         }
-        // Handle DEXScreener URL
-        else if (input.includes('dexscreener.com/solana/')) {
-            const parts = input.split('/solana/');
-            return parts[parts.length - 1];
-        }
         // Handle direct address input
-        else {
-            return input.trim();
-        }
+        return input.trim();
     } catch (error) {
-        console.error('Error parsing input:', error);
+        console.error('Error extracting address:', error);
         return null;
     }
-}
+};
 
 function DexScreenerChart({ pairAddress }: { pairAddress: string }) {
     return (
@@ -233,44 +252,203 @@ function DexScreenerChart({ pairAddress }: { pairAddress: string }) {
     );
 }
 
-async function fetchTokenInfo(tokenAddress: string): Promise<TokenInfo | null> {
+// Function to fetch token info from DEXScreener
+const fetchTokenInfo = async (address: string): Promise<TokenInfo | null> => {
+    console.log('Starting token fetch for address:', address);
+    
     try {
-        // Try DEXScreener first to get the pair address for the chart
-        const dexScreenerResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-        if (dexScreenerResponse.ok) {
-            const data = await dexScreenerResponse.json();
-            if (data.pairs && data.pairs[0]) {
-                const pair = data.pairs[0];
-                return {
-                    name: pair.baseToken.name,
-                    symbol: pair.baseToken.symbol,
-                    decimals: 9,
-                    address: tokenAddress,
-                    pairAddress: pair.pairAddress,
-                    source: 'DEXScreener'
-                };
-            }
-        }
+        // Try as token address first
+        const tokenResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
+        const tokenData = await tokenResponse.json();
+        console.log('Token response:', tokenData);
 
-        // Fallback to Jupiter if DEXScreener doesn't have the token
-        const response = await fetch(`https://token.jup.ag/token/${tokenAddress}`);
-        if (response.ok) {
-            const data = await response.json();
+        if (tokenData.pairs && tokenData.pairs.length > 0) {
+            // Find the pair with the highest liquidity
+            const bestPair = tokenData.pairs.reduce((best: any, current: any) => {
+                return (best.liquidity?.usd || 0) > (current.liquidity?.usd || 0) ? best : current;
+            }, tokenData.pairs[0]);
+
+            console.log('Best pair found:', bestPair);
+
+            // Determine if the token is baseToken or quoteToken
+            const isBase = bestPair.baseToken.address.toLowerCase() === address.toLowerCase();
+            const token = isBase ? bestPair.baseToken : bestPair.quoteToken;
+
             return {
-                name: data.name,
-                symbol: data.symbol,
-                decimals: data.decimals || 9,
-                address: tokenAddress,
-                logoURI: data.logoURI,
-                source: 'Jupiter'
+                name: token.name,
+                symbol: token.symbol,
+                address: token.address
             };
         }
 
+        // If not found as token, try as pair
+        const pairResponse = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${address}`);
+        const pairData = await pairResponse.json();
+        console.log('Pair response:', pairData);
+
+        if (pairData.pairs && pairData.pairs[0]) {
+            const pair = pairData.pairs[0];
+            // Default to baseToken
+            const token = pair.baseToken;
+
+            return {
+                name: token.name,
+                symbol: token.symbol,
+                address: token.address
+            };
+        }
+
+        // If still not found, try one more time with modified address format
+        // Sometimes DEXScreener needs the address without any wrapping
+        const cleanAddress = address.replace(/[^a-zA-Z0-9]/g, '');
+        const finalResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`);
+        const finalData = await finalResponse.json();
+        console.log('Final attempt response:', finalData);
+
+        if (finalData.pairs && finalData.pairs[0]) {
+            const token = finalData.pairs[0].baseToken;
+            return {
+                name: token.name,
+                symbol: token.symbol,
+                address: token.address
+            };
+        }
+
+        console.log('No token data found after all attempts');
         return null;
     } catch (error) {
-        console.error('Error fetching token info:', error);
+        console.error('Error fetching token:', error);
         return null;
     }
+};
+
+function TokenDashboard({ stats, tokenInfo }: { 
+    stats: TokenStats; 
+    tokenInfo: TokenInfo;
+}) {
+    // Safe number formatting helpers
+    const formatNumber = (num: number | undefined | null) => {
+        return num ? num.toLocaleString() : '0';
+    };
+
+    const formatCurrency = (num: number | undefined | null) => {
+        if (!num) return '$0';
+        return num >= 1000000 
+            ? `$${(num/1000000).toFixed(1)}M`
+            : `$${(num/1000).toFixed(0)}K`;
+    };
+
+    const formatPercent = (num: number | undefined | null) => {
+        return (num || 0).toFixed(2);
+    };
+
+    // Ensure we have the required data
+    const safeStats = {
+        price: stats.price || { usd: 0, sol: 0 },
+        changes: stats.changes || { m5: 0, h1: 0, h6: 0, h24: 0 },
+        volume: stats.volume || { usd: 0, buys: 0, sells: 0, buyVolume: 0, sellVolume: 0 },
+        transactions: stats.transactions || { total: 0, buys: 0, sells: 0, buyers: 0, sellers: 0 }
+    };
+
+    return (
+        <div className="bg-gray-800 rounded-lg p-4 mb-6">
+            {/* Token Info Header */}
+            <div className="mb-4 border-b border-gray-700 pb-2">
+                <h2 className="text-xl font-bold">{tokenInfo.name} ({tokenInfo.symbol})</h2>
+            </div>
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-4 gap-4">
+                {/* Price Section */}
+                <div className="col-span-4 flex justify-between items-center border-b border-gray-700 pb-4">
+                    <div>
+                        <div className="text-sm text-gray-400">Price USD</div>
+                        <div className="text-2xl font-bold">
+                            ${(safeStats.price.usd || 0).toFixed(8)}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-sm text-gray-400">Price SOL</div>
+                        <div className="text-2xl font-bold">
+                            {(safeStats.price.sol || 0).toFixed(8)} SOL
+                        </div>
+                    </div>
+                </div>
+
+                {/* Time Changes */}
+                <div className="grid grid-cols-4 gap-2 col-span-4">
+                    <TimeChange label="5M" value={safeStats.changes.m5 || 0} />
+                    <TimeChange label="1H" value={safeStats.changes.h1 || 0} />
+                    <TimeChange label="6H" value={safeStats.changes.h6 || 0} />
+                    <TimeChange label="24H" value={safeStats.changes.h24 || 0} />
+                </div>
+
+                {/* Stats Grid */}
+                <div className="col-span-4 grid grid-cols-3 gap-4 mt-4">
+                    <StatBox 
+                        label="Transactions" 
+                        value={formatNumber(safeStats.transactions.total)}
+                        subStats={[
+                            { label: 'Buys', value: formatNumber(safeStats.transactions.buys) },
+                            { label: 'Sells', value: formatNumber(safeStats.transactions.sells) }
+                        ]}
+                    />
+                    <StatBox 
+                        label="Volume" 
+                        value={formatCurrency(safeStats.volume.usd)}
+                        subStats={[
+                            { label: 'Buy Vol', value: formatCurrency(safeStats.volume.buyVolume) },
+                            { label: 'Sell Vol', value: formatCurrency(safeStats.volume.sellVolume) }
+                        ]}
+                    />
+                    <StatBox 
+                        label="Traders" 
+                        value={formatNumber(
+                            (safeStats.transactions.buyers || 0) + (safeStats.transactions.sellers || 0)
+                        )}
+                        subStats={[
+                            { label: 'Buyers', value: formatNumber(safeStats.transactions.buys) },
+                            { label: 'Sellers', value: formatNumber(safeStats.transactions.sells) }
+                        ]}
+                    />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// Helper components with null checks
+function TimeChange({ label, value }: { label: string; value: number }) {
+    const color = value >= 0 ? 'text-green-500' : 'text-red-500';
+    return (
+        <div className="bg-gray-700/50 rounded p-2">
+            <div className="text-sm text-gray-400">{label}</div>
+            <div className={`text-lg font-semibold ${color}`}>
+                {value.toFixed(2)}%
+            </div>
+        </div>
+    );
+}
+
+function StatBox({ label, value, subStats }: { 
+    label: string; 
+    value: string;
+    subStats: { label: string; value: string; }[];
+}) {
+    return (
+        <div className="bg-gray-700/50 rounded p-3">
+            <div className="text-sm text-gray-400">{label}</div>
+            <div className="text-xl font-bold mb-2">{value}</div>
+            <div className="grid grid-cols-2 gap-2">
+                {subStats.map(({ label, value }) => (
+                    <div key={label}>
+                        <div className="text-xs text-gray-400">{label}</div>
+                        <div className="text-sm">{value}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
 }
 
 const SubwalletsPage: FC = () => {
@@ -301,7 +479,8 @@ const SubwalletsPage: FC = () => {
     const [isLoadingToken, setIsLoadingToken] = useState(false);
     const [showFundModal, setShowFundModal] = useState(false);
     const [inputValue, setInputValue] = useState('');
-    const [displayedTokenName, setDisplayedTokenName] = useState<string>('CA Balance');
+    const [displayedTokenName, setDisplayedTokenName] = useState('CA Balance');
+    const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
 
     useEffect(() => {
         setMounted(true);
@@ -376,22 +555,22 @@ const SubwalletsPage: FC = () => {
             setError(null);
 
             try {
-                const tokenAddress = extractTokenAddress(inputValue);
+                const address = extractAddress(inputValue);
                 
-                if (!tokenAddress) {
+                if (!address) {
                     setError('Invalid token address or URL');
                     return;
                 }
 
                 // Validate it's a valid Solana address
                 try {
-                    new PublicKey(tokenAddress);
+                    new PublicKey(address);
                 } catch {
                     setError('Invalid Solana address format');
                     return;
                 }
 
-                const info = await fetchTokenInfo(tokenAddress);
+                const info = await fetchTokenInfo(address);
                 
                 if (isSubscribed) {
                     if (info) {
@@ -423,6 +602,20 @@ const SubwalletsPage: FC = () => {
             clearTimeout(timeoutId);
         };
     }, [inputValue]);
+
+    // Debug logging to track state updates
+    useEffect(() => {
+        console.log('Token Info Updated:', tokenInfo);
+    }, [tokenInfo]);
+
+    // Save token info to localStorage when it changes
+    useEffect(() => {
+        if (tokenInfo) {
+            localStorage.setItem('currentToken', JSON.stringify(tokenInfo));
+        } else {
+            localStorage.removeItem('currentToken');
+        }
+    }, [tokenInfo]);
 
     const truncateKey = (key: string) => {
         if (key.length <= 8) return key;
@@ -991,36 +1184,86 @@ const SubwalletsPage: FC = () => {
     const handleEnter = async () => {
         if (!inputValue.trim()) return;
         
-        setIsLoadingToken(true);
+        setIsLoading(true);
         try {
-            const tokenAddress = extractTokenAddress(inputValue);
-            if (!tokenAddress) {
-                console.error('Invalid input');
+            const address = extractAddress(inputValue);
+            if (!address) {
+                console.error('Invalid address format');
                 return;
             }
 
-            const info = await fetchTokenInfo(tokenAddress);
+            console.log('Extracted address:', address);
+            const info = await fetchTokenInfo(address);
+            
             if (info) {
+                console.log('Successfully found token info:', info);
                 setTokenInfo(info);
-                // Update the column title with token name/symbol
-                setDisplayedTokenName(`${info.symbol || info.name} Balance`);
+                await fetchTokenStats(info.address);
+            } else {
+                console.log('No token info found');
+                setTokenInfo(null);
             }
         } catch (error) {
-            console.error('Error:', error);
+            console.error('Error in handleEnter:', error);
+            setTokenInfo(null);
         } finally {
-            setIsLoadingToken(false);
+            setIsLoading(false);
         }
     };
 
     const handleClear = () => {
         setInputValue('');
         setTokenInfo(null);
-        setDisplayedTokenName('CA Balance');
+        localStorage.removeItem('currentToken');
     };
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
             handleEnter();
+        }
+    };
+
+    // Add useEffect to debug UI updates
+    useEffect(() => {
+        console.log('Rendering with tokenInfo:', tokenInfo);
+    }, [tokenInfo]);
+
+    const fetchTokenStats = async (address: string) => {
+        try {
+            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
+            const data = await response.json();
+            
+            if (data.pairs && data.pairs[0]) {
+                const pair = data.pairs[0];
+                setTokenStats({
+                    price: {
+                        usd: parseFloat(pair.priceUsd),
+                        sol: parseFloat(pair.priceNative),
+                    },
+                    changes: {
+                        m5: pair.priceChange.m5,
+                        h1: pair.priceChange.h1,
+                        h6: pair.priceChange.h6,
+                        h24: pair.priceChange.h24,
+                    },
+                    volume: {
+                        usd: pair.volume.h24,
+                        buys: pair.txns.h24.buys,
+                        sells: pair.txns.h24.sells,
+                        buyVolume: pair.volume.h24.buyVolume,
+                        sellVolume: pair.volume.h24.sellVolume,
+                    },
+                    transactions: {
+                        total: pair.txns.h24.total,
+                        buys: pair.txns.h24.buys,
+                        sells: pair.txns.h24.sells,
+                        buyers: pair.txns.h24.buyers,
+                        sellers: pair.txns.h24.sellers,
+                    },
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching token stats:', error);
         }
     };
 
@@ -1037,298 +1280,211 @@ const SubwalletsPage: FC = () => {
     }
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
-            <div className="flex flex-wrap items-center gap-4 mb-8">
-                <WalletMultiButton className="h-10" />
-                {publicKey && (
-                    <div className="flex items-center space-x-4 flex-wrap gap-y-4">
-                        {hasGeneratedWallets ? (
-                            <>
-                                <div className="bg-gray-800 px-4 h-10 flex items-center rounded-lg">
-                                    <p className="text-gray-300">
-                                        Subwallets already generated
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={downloadSubwallets}
-                                    disabled={isLoading || !subwallets.length}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-                                >
-                                    <span>Download Subwallets</span>
-                                    <span>📥</span>
-                                </button>
-                                <button
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={isLoading}
-                                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    Restore Subwallets
-                                </button>
-                                <button
-                                    onClick={() => void refreshBalances()}
-                                    disabled={isLoading || !subwallets.length}
-                                    className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-                                >
-                                    <span>Refresh Balances</span>
-                                    <span>🔄</span>
-                                </button>
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    onChange={restoreSubwallets}
-                                    className="hidden"
-                                    accept=".json"
-                                />
-                            </>
-                        ) : (
-                            <button
-                                onClick={generateSubwallets}
-                                disabled={isLoading || isGenerating}
-                                className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
-                            </button>
-                        )}
+        <div className="container mx-auto p-4">
+            {/* Top section with wallet info and buttons */}
+            <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-4">
+                    <div className="bg-purple-800 p-2 rounded">
+                        <span>JP7...Zhai</span>
                     </div>
-                )}
+                    <div>Subwallets already generated</div>
+                    <button
+                        onClick={downloadSubwallets}
+                        disabled={isLoading || !subwallets.length}
+                        className="bg-blue-600 px-4 py-2 rounded flex items-center gap-2"
+                    >
+                        Download Subwallets 📥
+                    </button>
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isLoading}
+                        className="bg-purple-600 px-4 py-2 rounded"
+                    >
+                        Restore Subwallets
+                    </button>
+                    <button
+                        onClick={() => void refreshBalances()}
+                        disabled={isLoading || !subwallets.length}
+                        className="bg-green-600 px-4 py-2 rounded flex items-center gap-2"
+                    >
+                        Refresh Balances 🔄
+                    </button>
+                </div>
             </div>
 
-            {error && (
-                <div className="bg-red-900/50 border border-red-500 text-red-100 px-4 py-2 rounded-lg mb-4">
-                    {error}
+            {/* Parent Wallet and Sniper Target section */}
+            <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-2">
+                    <span className="text-gray-400">Parent Wallet</span>
+                    <span>📋 J1P7JYF1pEWu1GceZjwNR78wNJ7FU2iD3UjTzwrNZhai</span>
+                </div>
+
+                {/* Sniper Target */}
+                <div className="flex flex-col gap-2">
+                    <div className="text-white">Sniper Target</div>
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={inputValue}
+                            onChange={(e) => setInputValue(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            placeholder="Enter CA or URL"
+                            className="bg-gray-700 rounded p-2 text-white w-64"
+                        />
+                        <button
+                            onClick={handleEnter}
+                            disabled={isLoadingToken || !inputValue.trim()}
+                            className={`px-4 py-2 rounded ${
+                                isLoadingToken || !inputValue.trim()
+                                    ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-white'
+                            }`}
+                        >
+                            {isLoadingToken ? (
+                                <span className="flex items-center gap-2">
+                                    <span className="animate-spin">⏳</span>
+                                </span>
+                            ) : (
+                                'Enter'
+                            )}
+                        </button>
+                        <button
+                            onClick={handleClear}
+                            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-white"
+                        >
+                            Clear
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-4 mb-6">
+                <button
+                    onClick={() => setModalType('fund')}
+                    className="bg-orange-600 px-4 py-2 rounded flex items-center gap-2"
+                    disabled={isLoading || !subwallets.length}
+                >
+                    Fund Subwallets with SOL
+                </button>
+                <button
+                    onClick={() => setModalType('recoverSol')}
+                    className="bg-red-600 px-4 py-2 rounded flex items-center gap-2"
+                    disabled={isLoading || !subwallets.length}
+                >
+                    Recover SOL from Subwallets 🔄
+                </button>
+                <button
+                    onClick={() => setModalType('recoverCA')}
+                    className="bg-purple-800 px-4 py-2 rounded flex items-center gap-2"
+                    disabled={isLoading || !subwallets.length || !caAddress}
+                >
+                    Recover CA tokens from Subwallets
+                </button>
+                <button
+                    onClick={() => setModalType('sellAll')}
+                    className="bg-pink-600 px-4 py-2 rounded flex items-center gap-2"
+                    disabled={isLoading || !subwallets.length || !caAddress}
+                >
+                    SELL ALL 💸
+                </button>
+            </div>
+
+            {/* Only render dashboard if we have stats */}
+            {tokenStats && tokenInfo && (
+                <TokenDashboard 
+                    stats={tokenStats} 
+                    tokenInfo={tokenInfo}
+                />
+            )}
+
+            {/* Loading indicator for stats */}
+            {isLoading && (
+                <div className="bg-gray-800 rounded-lg p-4 mb-6">
+                    <div className="animate-pulse flex space-x-4">
+                        <div className="flex-1 space-y-4 py-1">
+                            <div className="h-4 bg-gray-700 rounded w-3/4"></div>
+                            <div className="space-y-2">
+                                <div className="h-4 bg-gray-700 rounded"></div>
+                                <div className="h-4 bg-gray-700 rounded w-5/6"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
-            {publicKey && (
-                <div className="flex gap-4 mb-8">
-                    <div className="bg-gray-800 rounded-lg w-1/2 h-10 flex items-center px-4">
-                        <span className="text-gray-400 mr-4">Parent Wallet</span>
-                        <div className="flex items-center space-x-2 overflow-hidden">
-                            <button
-                                onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
-                                className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
-                                title="Copy public key"
-                            >
-                                {isCopied(-1, 'public') ? '✓' : '📋'}
-                            </button>
-                            <span className="font-mono truncate">{publicKey.toString()}</span>
-                        </div>
-                    </div>
-
-                    <div className="flex flex-1 gap-4">
-                        <div className="flex flex-col gap-2">
-                            <h2 className="text-lg font-semibold text-white">
-                                Sniper Target
-                            </h2>
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
-                                    value={inputValue}
-                                    onChange={(e) => setInputValue(e.target.value)}
-                                    placeholder="Enter CA or URL"
-                                    className="flex-1 bg-gray-700 rounded p-2 text-white"
-                                />
-                                <button
-                                    onClick={handleEnter}
-                                    disabled={isLoadingToken || !inputValue.trim()}
-                                    className={`px-4 py-2 rounded font-semibold ${
-                                        isLoadingToken || !inputValue.trim()
-                                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                                            : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                    }`}
-                                >
-                                    {isLoadingToken ? (
-                                        <span className="flex items-center gap-2">
-                                            <span className="animate-spin">⏳</span> Loading
-                                        </span>
+            {/* Generated Subwallets table */}
+            <div className="overflow-x-auto">
+                <table className="min-w-full bg-gray-800/50 rounded-lg overflow-hidden">
+                    <thead>
+                        <tr className="border-b border-gray-700">
+                            <th className="py-3 px-4">INDEX</th>
+                            <th className="py-3 px-4">PUBLIC KEY</th>
+                            <th className="py-3 px-4" colSpan={2}>PRIVATE KEY</th>
+                            <th className="py-3 px-4">SOL BALANCE</th>
+                            <th className="py-3 px-4">CA BALANCE</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {subwallets.map((wallet, index) => (
+                            <tr key={index} className={index % 2 === 0 ? 'bg-gray-800' : ''}>
+                                <td className="py-2 px-4">{index}</td>
+                                <td className="py-2 px-4">
+                                    <div className="flex items-center space-x-2">
+                                        <button
+                                            onClick={() => void copyToClipboard(wallet.publicKey, index, 'public')}
+                                            className="text-gray-400 hover:text-white transition-colors"
+                                            title="Copy public key"
+                                        >
+                                            {isCopied(index, 'public') ? '✓' : '📋'}
+                                        </button>
+                                        <span className="font-mono">{truncateKey(wallet.publicKey)}</span>
+                                    </div>
+                                </td>
+                                <td className="py-2 pr-0 pl-4 w-10">
+                                    <button
+                                        onClick={() => void copyToClipboard(wallet.privateKey, index, 'private')}
+                                        className="text-gray-400 hover:text-white transition-colors"
+                                        title="Copy private key"
+                                    >
+                                        {isCopied(index, 'private') ? '✓' : '📋'}
+                                    </button>
+                                </td>
+                                <td className="py-2 pl-2 pr-4">
+                                    <div className="font-mono text-gray-400">
+                                        {formatPrivateKey(wallet.privateKey)}
+                                    </div>
+                                </td>
+                                <td className="py-2 px-4">
+                                    {wallet.isLoading ? (
+                                        <span className="animate-pulse">Loading...</span>
                                     ) : (
-                                        'Enter'
+                                        `${wallet.solBalance} SOL`
                                     )}
-                                </button>
-                                <button
-                                    onClick={handleClear}
-                                    className="px-4 py-2 rounded font-semibold bg-red-600 hover:bg-red-700 text-white"
-                                >
-                                    Clear
-                                </button>
-                            </div>
-                        </div>
-                        {isLoadingToken ? (
-                            <span className="text-gray-400 animate-pulse">Loading...</span>
-                        ) : tokenInfo ? (
-                            <TokenInfoDisplay info={tokenInfo} />
-                        ) : inputValue && (
-                            <div className="bg-red-900/50 text-red-200 rounded-lg p-3">
-                                Token not found
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
+                                </td>
+                                <td className="py-2 px-4">
+                                    {wallet.isLoading ? (
+                                        <span className="animate-pulse">Loading...</span>
+                                    ) : (
+                                        <span className="font-medium text-blue-400">
+                                            {tokenInfo ? tokenInfo.symbol : 'CA Balance'}
+                                        </span>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
 
-            {publicKey && hasGeneratedWallets && (
-                <div className="flex gap-4 mb-8">
-                    <button
-                        onClick={() => setModalType('fund')}
-                        className="bg-yellow-600 px-4 py-2 h-10 rounded hover:bg-yellow-500 transition-colors disabled:opacity-50"
-                        disabled={isLoading || !subwallets.length}
-                    >
-                        Fund Subwallets with SOL 💰
-                    </button>
-                    
-                    <button
-                        onClick={() => setModalType('recoverSol')}
-                        className="bg-orange-600 px-4 py-2 h-10 rounded hover:bg-orange-500 transition-colors disabled:opacity-50"
-                        disabled={isLoading || !subwallets.length}
-                    >
-                        Recover SOL from Subwallets 🔄
-                    </button>
-                    
-                    <button
-                        onClick={() => setModalType('recoverCA')}
-                        className="bg-red-600 px-4 py-2 h-10 rounded hover:bg-red-500 transition-colors disabled:opacity-50"
-                        disabled={isLoading || !subwallets.length || !caAddress}
-                    >
-                        Recover CA tokens from Subwallets 🔄
-                    </button>
-                    
-                    <button
-                        onClick={() => setModalType('sellAll')}
-                        className="bg-pink-600 px-4 py-2 h-10 rounded hover:bg-pink-500 transition-colors disabled:opacity-50"
-                        disabled={isLoading || !subwallets.length || !caAddress}
-                    >
-                        SELL ALL 💸
-                    </button>
-                </div>
-            )}
-
-            {/* Fund Modal */}
-            <FundModal 
-                isOpen={modalType === 'fund'}
-                onClose={() => setModalType(null)}
-                onConfirm={handleFundSubwallets}
-                totalSubwallets={subwallets.length}
-                subwallets={subwallets}
-            >
-                <ProgressIndicator progress={progress} />
-            </FundModal>
-
-            {/* Recover SOL Modal */}
-            {modalType === 'recoverSol' && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-                    <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-                        <div className="flex justify-between items-center mb-6">
-                            <h2 className="text-xl font-bold">🔄 Recover SOL</h2>
-                            <button onClick={() => setModalType(null)} className="text-gray-400 hover:text-white">✕</button>
-                        </div>
-
-                        <div className="bg-gray-700/50 rounded p-4 mb-6">
-                            <p>This will recover all SOL from your subwallets back to your main wallet.</p>
-                            <p className="mt-2 text-sm text-gray-300">
-                                Total SOL to recover: {subwallets.reduce((sum, w) => sum + (parseFloat(w.solBalance) || 0), 0)} SOL
-                            </p>
-                            <p className="mt-1 text-sm text-gray-300">
-                                From {subwallets.length} subwallets
-                            </p>
-                        </div>
-
-                        <div className="flex justify-end gap-3">
-                            <button
-                                onClick={() => setModalType(null)}
-                                className="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleRecoverSol}
-                                className="px-4 py-2 bg-orange-600 rounded hover:bg-orange-500"
-                            >
-                                Recover SOL 🔄
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {publicKey && subwallets.length === 0 && (
-                <div className="text-center py-6 bg-gray-800/50 rounded-lg mt-4">
-                    <p className="text-gray-300">No subwallets found. Generate new ones or restore from a file.</p>
-                </div>
-            )}
-
-            {isLoading && loadingAction === 'refreshing' && (
-                <div className="text-blue-400 mb-4 px-4 py-2 bg-blue-900/20 rounded">
-                    Refreshing balances... This may take a moment.
-                </div>
-            )}
-
-            {subwallets.length > 0 && (
-                <div className="mt-8">
-                    <h2 className="text-2xl font-bold mb-4 text-white">Generated Subwallets</h2>
-                    <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left">
-                                <thead>
-                                    <tr className="border-b border-gray-700">
-                                        <th className="py-3 px-4">INDEX</th>
-                                        <th className="py-3 px-4">PUBLIC KEY</th>
-                                        <th className="py-3 px-4" colSpan={2}>PRIVATE KEY</th>
-                                        <th className="py-3 px-4">SOL BALANCE</th>
-                                        <th className="py-3 px-4">CA BALANCE</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {subwallets.map((wallet, index) => (
-                                        <tr key={index} className={index % 2 === 0 ? 'bg-gray-800' : ''}>
-                                            <td className="py-2 px-4">{index}</td>
-                                            <td className="py-2 px-4">
-                                                <div className="flex items-center space-x-2">
-                                                    <button
-                                                        onClick={() => void copyToClipboard(wallet.publicKey, index, 'public')}
-                                                        className="text-gray-400 hover:text-white transition-colors"
-                                                        title="Copy public key"
-                                                    >
-                                                        {isCopied(index, 'public') ? '✓' : '📋'}
-                                                    </button>
-                                                    <span className="font-mono">{truncateKey(wallet.publicKey)}</span>
-                                                </div>
-                                            </td>
-                                            <td className="py-2 pr-0 pl-4 w-10">
-                                                <button
-                                                    onClick={() => void copyToClipboard(wallet.privateKey, index, 'private')}
-                                                    className="text-gray-400 hover:text-white transition-colors"
-                                                    title="Copy private key"
-                                                >
-                                                    {isCopied(index, 'private') ? '✓' : '📋'}
-                                                </button>
-                                            </td>
-                                            <td className="py-2 pl-2 pr-4">
-                                                <div className="font-mono text-gray-400">
-                                                    {formatPrivateKey(wallet.privateKey)}
-                                                </div>
-                                            </td>
-                                            <td className="py-2 px-4">
-                                                {wallet.isLoading ? (
-                                                    <span className="animate-pulse">Loading...</span>
-                                                ) : (
-                                                    `${wallet.solBalance} SOL`
-                                                )}
-                                            </td>
-                                            <td className="py-2 px-4">
-                                                {wallet.isLoading ? (
-                                                    <span className="animate-pulse">Loading...</span>
-                                                ) : (
-                                                    wallet.caBalance
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {/* Debug info - remove in production */}
+            <div className="mt-4 text-xs text-gray-500">
+                {tokenInfo && (
+                    <pre>
+                        Current Token: {JSON.stringify(tokenInfo, null, 2)}
+                    </pre>
+                )}
+            </div>
         </div>
     );
 };
