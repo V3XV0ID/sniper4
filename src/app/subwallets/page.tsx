@@ -370,10 +370,14 @@ const SubwalletsPage: FC = () => {
     };
 
     const refreshBalances = async () => {
-        if (!publicKey || !subwallets.length || isLoading) return;
+        if (!publicKey || !subwallets.length) return;
         
         setIsLoading(true);
+        setLoadingAction('refreshing');
+        setError(null);
+
         try {
+            // Use a different RPC endpoint to avoid rate limits
             const connection = new Connection(
                 'https://api.mainnet-beta.solana.com',
                 'confirmed'
@@ -381,39 +385,53 @@ const SubwalletsPage: FC = () => {
 
             const updatedSubwallets = [...subwallets];
             
-            // Fetch balances in batches to avoid rate limits
-            for (let i = 0; i < updatedSubwallets.length; i++) {
-                const wallet = updatedSubwallets[i];
-                const address = new PublicKey(wallet.publicKey);
+            // Process in smaller batches
+            const batchSize = 2;
+            for (let i = 0; i < updatedSubwallets.length; i += batchSize) {
+                const batch = updatedSubwallets.slice(i, i + batchSize);
                 
-                // Get SOL balance
-                const solBalance = await connection.getBalance(address);
-                updatedSubwallets[i].solBalance = solBalance / LAMPORTS_PER_SOL;
+                try {
+                    await Promise.all(
+                        batch.map(async (wallet, index) => {
+                            try {
+                                const solBalance = await connection.getBalance(
+                                    new PublicKey(wallet.publicKey)
+                                );
+                                updatedSubwallets[i + index].solBalance = 
+                                    (solBalance / LAMPORTS_PER_SOL).toFixed(4);
 
-                // Get CA balance if address is provided
-                if (caAddress) {
-                    try {
-                        const tokenAddress = new PublicKey(caAddress);
-                        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-                            address,
-                            { mint: tokenAddress }
-                        );
-                        const balance = tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0;
-                        updatedSubwallets[i].caBalance = balance;
-                    } catch (err) {
-                        console.error('Error fetching token balance:', err);
-                        updatedSubwallets[i].caBalance = 0;
-                    }
+                                if (caAddress) {
+                                    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+                                        new PublicKey(wallet.publicKey),
+                                        { mint: new PublicKey(caAddress) }
+                                    );
+                                    
+                                    const balance = tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0;
+                                    updatedSubwallets[i + index].caBalance = balance.toString();
+                                }
+                            } catch (err) {
+                                console.error(`Error fetching balance for wallet ${i + index}:`, err);
+                                updatedSubwallets[i + index].solBalance = 'Error';
+                                updatedSubwallets[i + index].caBalance = 'Error';
+                            }
+                        })
+                    );
+
+                    // Update state after each batch
+                    setSubwallets([...updatedSubwallets]);
+                } catch (batchErr) {
+                    console.error('Batch error:', batchErr);
                 }
-            }
 
-            setSubwallets(updatedSubwallets);
-        } catch (error) {
-            console.error('Error refreshing balances:', error);
-            setError('Failed to refresh balances');
-            setTimeout(() => setError(null), 5000);
+                // Add delay between batches to avoid rate limits
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        } catch (err) {
+            console.error('Error refreshing balances:', err);
+            setError('Failed to refresh balances. Please try again.');
         } finally {
             setIsLoading(false);
+            setLoadingAction(null);
         }
     };
 
@@ -591,11 +609,9 @@ const SubwalletsPage: FC = () => {
                 </div>
             )}
 
-            {isLoading && (
-                <div className="text-center py-4">
-                    <p className="text-gray-300">
-                        {loadingAction === 'refreshing' ? 'Refreshing balances...' : 'Restoring wallets...'}
-                    </p>
+            {isLoading && loadingAction === 'refreshing' && (
+                <div className="text-blue-400 mb-4 px-4 py-2 bg-blue-900/20 rounded">
+                    Refreshing balances... This may take a moment.
                 </div>
             )}
 
