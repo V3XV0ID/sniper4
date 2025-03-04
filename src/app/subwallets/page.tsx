@@ -2,15 +2,18 @@
 
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { FC, useState } from 'react';
-import { Keypair } from '@solana/web3.js';
+import { FC, useState, useEffect } from 'react';
+import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { derivePath } from 'ed25519-hd-key';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 interface Subwallet {
     publicKey: string;
     privateKey: string;
     index: number;
     isRevealed: boolean;
+    solBalance: number;
+    caBalance: number;
 }
 
 const SubwalletsPage: FC = () => {
@@ -19,8 +22,49 @@ const SubwalletsPage: FC = () => {
     const [isGenerating, setIsGenerating] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [copiedType, setCopiedType] = useState<'public' | 'private' | null>(null);
+    const [connection] = useState(new Connection('https://api.mainnet-beta.solana.com'));
+    const [caAddress, setCaAddress] = useState<string>(''); // Add input for CA address
 
     const truncateKey = (key: string) => `${key.slice(0, 12)}...`;
+    const formatBalance = (balance: number) => balance.toFixed(4);
+
+    const fetchBalances = async (wallets: Subwallet[]) => {
+        const updatedWallets = [...wallets];
+        
+        for (const wallet of updatedWallets) {
+            try {
+                // Fetch SOL balance
+                const solBalance = await connection.getBalance(new PublicKey(wallet.publicKey));
+                wallet.solBalance = solBalance / LAMPORTS_PER_SOL;
+
+                // Fetch CA balance if address is provided
+                if (caAddress) {
+                    try {
+                        const tokenAccount = await connection.getParsedTokenAccountsByOwner(
+                            new PublicKey(wallet.publicKey),
+                            { programId: TOKEN_PROGRAM_ID }
+                        );
+                        
+                        const caAccountInfo = tokenAccount.value.find(
+                            (acc) => acc.account.data.parsed.info.mint === caAddress
+                        );
+
+                        wallet.caBalance = caAccountInfo 
+                            ? Number(caAccountInfo.account.data.parsed.info.tokenAmount.uiAmount)
+                            : 0;
+                    } catch (error) {
+                        wallet.caBalance = 0;
+                    }
+                }
+            } catch (error) {
+                console.error(`Error fetching balances for wallet ${wallet.index}:`, error);
+                wallet.solBalance = 0;
+                wallet.caBalance = 0;
+            }
+        }
+
+        setSubwallets(updatedWallets);
+    };
 
     const generateSubwallets = async () => {
         if (!publicKey || !signMessage) return;
@@ -40,11 +84,14 @@ const SubwalletsPage: FC = () => {
                     publicKey: keypair.publicKey.toString(),
                     privateKey: Buffer.from(keypair.secretKey).toString('hex'),
                     index: i,
-                    isRevealed: false
+                    isRevealed: false,
+                    solBalance: 0,
+                    caBalance: 0
                 });
             }
             
             setSubwallets(newSubwallets);
+            await fetchBalances(newSubwallets);
         } catch (error) {
             console.error('Error generating subwallets:', error);
         }
@@ -101,13 +148,34 @@ const SubwalletsPage: FC = () => {
                         </div>
                     </div>
 
-                    <button
-                        onClick={generateSubwallets}
-                        disabled={isGenerating}
-                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
-                    </button>
+                    <div className="flex space-x-4 items-center">
+                        <button
+                            onClick={generateSubwallets}
+                            disabled={isGenerating}
+                            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
+                        </button>
+
+                        <div className="flex-1">
+                            <input
+                                type="text"
+                                placeholder="Enter CA Address (optional)"
+                                value={caAddress}
+                                onChange={(e) => setCaAddress(e.target.value)}
+                                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
+                            />
+                        </div>
+
+                        {subwallets.length > 0 && (
+                            <button
+                                onClick={() => fetchBalances(subwallets)}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+                            >
+                                Refresh Balances
+                            </button>
+                        )}
+                    </div>
 
                     {subwallets.length > 0 && (
                         <div className="mt-8">
@@ -120,6 +188,8 @@ const SubwalletsPage: FC = () => {
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Index</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Public Key</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">SOL Balance</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">CA Balance</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-700">
@@ -171,6 +241,12 @@ const SubwalletsPage: FC = () => {
                                                                 {isCopied(wallet.index, 'private') ? '✓' : '📋'}
                                                             </button>
                                                         </div>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                                                        {formatBalance(wallet.solBalance)} SOL
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                                                        {formatBalance(wallet.caBalance)}
                                                     </td>
                                                 </tr>
                                             ))}
