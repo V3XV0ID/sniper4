@@ -11,6 +11,7 @@ import { ActionModal, ActionType } from '@/components/ActionModal';
 import { FundModal } from '@/components/modals/FundModal';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { useConnection } from '@solana/wallet-adapter-react';
+import { NATIVE_MINT } from "@solana/spl-token";
 
 // Dynamically import WalletMultiButton with ssr disabled
 const WalletMultiButtonDynamic = dynamic(
@@ -255,39 +256,72 @@ function DexScreenerChart({ pairAddress }: { pairAddress: string }) {
 // Function to fetch token info from DEXScreener
 const fetchTokenInfo = async (address: string) => {
     try {
-        const cleanAddress = address.trim();
-        // Add logging to see what URL we're hitting
-        console.log('Fetching token info for:', cleanAddress);
+        // Clean the address
+        const cleanAddress = address.toLowerCase().trim();
+        console.log('Searching for Solana token:', cleanAddress);
+
+        // Specifically use the Solana chain endpoint
+        const url = `https://api.dexscreener.com/latest/dex/search/?q=${cleanAddress}&chain=solana`;
+        console.log('Fetching from:', url);
         
-        const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`);
-        
-        // Log the response status and type
-        console.log('Response status:', response.status);
-        console.log('Content-Type:', response.headers.get('content-type'));
-
-        // Check if response is ok
-        if (!response.ok) {
-            throw new Error(`API request failed with status ${response.status}`);
-        }
-
-        // Ensure we're getting JSON
-        const contentType = response.headers.get('content-type');
-        if (!contentType?.includes('application/json')) {
-            throw new Error(`Expected JSON but got ${contentType}`);
-        }
-
+        const response = await fetch(url);
         const data = await response.json();
         
-        // Validate the response data
-        if (!data || !data.pairs || !data.pairs[0]) {
-            throw new Error('Invalid response format from DEXScreener');
+        console.log('DEXScreener response:', data);
+
+        // If no pairs found, try Raydium directly
+        if (!data.pairs || data.pairs.length === 0) {
+            // If we can't find the token on DEXScreener, we'll still allow the user to proceed
+            // This is common for new tokens
+            return {
+                name: 'Unknown Token',
+                symbol: 'TOKEN',
+                address: cleanAddress,
+                price: '0',
+                volume: '0',
+                isNew: true
+            };
         }
 
-        return data;
+        // Find Solana pairs
+        const solanaPairs = data.pairs.filter(pair => 
+            pair.chainId === 'solana' || pair.chain === 'solana'
+        );
+
+        if (solanaPairs.length === 0) {
+            return {
+                name: 'Unknown Token',
+                symbol: 'TOKEN',
+                address: cleanAddress,
+                price: '0',
+                volume: '0',
+                isNew: true
+            };
+        }
+
+        // Get the most relevant pair
+        const bestPair = solanaPairs[0];
+        
+        return {
+            name: bestPair.baseToken.name || 'Unknown Token',
+            symbol: bestPair.baseToken.symbol || 'TOKEN',
+            address: cleanAddress,
+            price: bestPair.priceUsd || '0',
+            volume: bestPair.volume || '0',
+            isNew: false
+        };
+
     } catch (error) {
         console.error('Token fetch error:', error);
-        // Re-throw with a user-friendly message
-        throw new Error('Failed to fetch token information. Please try again.');
+        // Return default values instead of throwing
+        return {
+            name: 'Unknown Token',
+            symbol: 'TOKEN',
+            address: cleanAddress,
+            price: '0',
+            volume: '0',
+            isNew: true
+        };
     }
 };
 
@@ -420,6 +454,16 @@ function StatBox({ label, value, subStats }: {
     );
 }
 
+// Add this type for tracking buy progress
+interface BuyProgress {
+  processedWallets: number;
+  totalWallets: number;
+  successfulBuys: number;
+  failedBuys: number;
+  errors: string[];
+  isComplete: boolean;
+}
+
 const SubwalletsPage: FC = () => {
     const { publicKey, signMessage, sendTransaction } = useWallet();
     const { connection } = useConnection();
@@ -448,6 +492,8 @@ const SubwalletsPage: FC = () => {
     const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
     const [inputValue, setInputValue] = useState('');
     const [displayedTokenName, setDisplayedTokenName] = useState('CA Balance');
+    const [isBuying, setIsBuying] = useState(false);
+    const [buyProgress, setBuyProgress] = useState<BuyProgress | null>(null);
 
     useEffect(() => {
         setMounted(true);
@@ -1103,41 +1149,47 @@ const SubwalletsPage: FC = () => {
         if (!inputValue) return;
         
         setIsLoading(true);
-        try {
-            // Extract address from URL if needed
-            const address = inputValue.includes('dexscreener.com') 
-                ? inputValue.split('/').pop() 
-                : inputValue;
+        setError(null);
 
-            if (!address) {
-                throw new Error('Invalid token address');
+        try {
+            // Extract address from input
+            let address = inputValue.trim();
+            
+            if (address.includes('dexscreener.com')) {
+                const parts = address.split('/');
+                address = parts[parts.length - 1];
             }
+
+            console.log('Processing address:', address);
 
             const data = await fetchTokenInfo(address);
             
-            // Update token info with proper null checks
             setTokenInfo({
-                name: data.pairs[0]?.baseToken?.name || 'Unknown',
-                symbol: data.pairs[0]?.baseToken?.symbol || 'Unknown',
-                address: data.pairs[0]?.baseToken?.address || address
+                name: data.name,
+                symbol: data.symbol,
+                address: data.address
             });
 
-            // Update token stats if available
-            if (data.pairs[0]) {
-                setTokenStats({
-                    price: data.pairs[0].priceUsd || '0',
-                    volume: data.pairs[0].volume || '0',
-                    transactions: {
-                        total: data.pairs[0].txns?.h24 || 0,
-                        buys: data.pairs[0].txns?.h24Buy || 0,
-                        sells: data.pairs[0].txns?.h24Sell || 0
-                    }
-                });
+            setTokenStats({
+                price: data.price,
+                volume: data.volume,
+                transactions: {
+                    total: 0,
+                    buys: 0,
+                    sells: 0
+                }
+            });
+
+            // If it's a new token, show a warning but don't block the operation
+            if (data.isNew) {
+                setError('Token not found on DEXScreener. This might be a new token.');
             }
+
+            console.log('Token info set:', data);
+
         } catch (error) {
             console.error('Error in handleTokenFetch:', error);
-            // Show error to user (you'll need to add error state management)
-            setError(error.message);
+            setError('Failed to fetch token info, but you can still proceed.');
         } finally {
             setIsLoading(false);
         }
@@ -1153,6 +1205,113 @@ const SubwalletsPage: FC = () => {
     useEffect(() => {
         console.log('Rendering with tokenInfo:', tokenInfo);
     }, [tokenInfo]);
+
+    // Add the buy function
+    const handleBuyAll = async () => {
+        if (!tokenInfo?.address || !subwallets.length) {
+            console.error("No token address or subwallets");
+            return;
+        }
+
+        setIsBuying(true);
+        setBuyProgress({
+            processedWallets: 0,
+            totalWallets: subwallets.length,
+            successfulBuys: 0,
+            failedBuys: 0,
+            errors: [],
+            isComplete: false
+        });
+
+        const BATCH_SIZE = 2;
+        const batches = Math.ceil(subwallets.length / BATCH_SIZE);
+
+        for (let i = 0; i < batches; i++) {
+            const batchWallets = subwallets.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+            
+            await Promise.all(batchWallets.map(async (wallet) => {
+                try {
+                    const keypair = Keypair.fromSecretKey(
+                        new Uint8Array(wallet.privateKey.split(',').map(Number))
+                    );
+
+                    const balance = await connection.getBalance(keypair.publicKey);
+                    if (balance < 0.01 * LAMPORTS_PER_SOL) {
+                        throw new Error('Insufficient balance');
+                    }
+
+                    const amountToSpend = balance - (0.01 * LAMPORTS_PER_SOL);
+
+                    // Get quote from Jupiter API
+                    const quoteResponse = await fetch(
+                        `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112` +
+                        `&outputMint=${tokenInfo.address}` +
+                        `&amount=${amountToSpend}` +
+                        `&slippageBps=100`
+                    );
+
+                    const quoteData = await quoteResponse.json();
+
+                    if (!quoteData.data) {
+                        throw new Error('No route found');
+                    }
+
+                    // Get swap transaction
+                    const swapResponse = await fetch('https://quote-api.jup.ag/v6/swap', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            quoteResponse: quoteData,
+                            userPublicKey: keypair.publicKey.toString(),
+                            wrapUnwrapSOL: true
+                        })
+                    });
+
+                    const swapData = await swapResponse.json();
+                    
+                    // Deserialize and sign transaction
+                    const swapTransaction = Transaction.from(
+                        Buffer.from(swapData.swapTransaction, 'base64')
+                    );
+
+                    swapTransaction.sign(keypair);
+
+                    // Send and confirm transaction
+                    const txid = await connection.sendRawTransaction(
+                        swapTransaction.serialize(),
+                        { skipPreflight: true }
+                    );
+
+                    await connection.confirmTransaction(txid, 'confirmed');
+
+                    setBuyProgress(prev => ({
+                        ...prev!,
+                        processedWallets: prev!.processedWallets + 1,
+                        successfulBuys: prev!.successfulBuys + 1
+                    }));
+
+                } catch (error) {
+                    console.error(`Error buying for wallet ${wallet.publicKey}:`, error);
+                    setBuyProgress(prev => ({
+                        ...prev!,
+                        processedWallets: prev!.processedWallets + 1,
+                        failedBuys: prev!.failedBuys + 1,
+                        errors: [...prev!.errors, `Wallet ${wallet.publicKey}: ${error.message}`]
+                    }));
+                }
+            }));
+
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        setBuyProgress(prev => ({
+            ...prev!,
+            isComplete: true
+        }));
+        setIsBuying(false);
+    };
 
     if (!mounted) {
         return (
@@ -1348,6 +1507,28 @@ const SubwalletsPage: FC = () => {
                     </pre>
                 )}
             </div>
+
+            {/* Add progress display */}
+            {buyProgress && (
+                <div className="mt-4 p-4 bg-gray-800 rounded">
+                    <h3 className="text-lg font-bold mb-2">Buy Progress</h3>
+                    <div className="space-y-2">
+                        <p>Processed: {buyProgress.processedWallets}/{buyProgress.totalWallets}</p>
+                        <p className="text-green-500">Successful: {buyProgress.successfulBuys}</p>
+                        <p className="text-red-500">Failed: {buyProgress.failedBuys}</p>
+                        {buyProgress.errors.length > 0 && (
+                            <div className="mt-2">
+                                <p className="font-bold text-red-400">Errors:</p>
+                                <ul className="list-disc pl-4">
+                                    {buyProgress.errors.map((error, i) => (
+                                        <li key={i} className="text-sm text-red-400">{error}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
