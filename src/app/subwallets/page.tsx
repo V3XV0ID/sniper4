@@ -253,72 +253,41 @@ function DexScreenerChart({ pairAddress }: { pairAddress: string }) {
 }
 
 // Function to fetch token info from DEXScreener
-const fetchTokenInfo = async (address: string): Promise<TokenInfo | null> => {
-    console.log('Starting token fetch for address:', address);
-    
+const fetchTokenInfo = async (address: string) => {
     try {
-        // Try as token address first
-        const tokenResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
-        const tokenData = await tokenResponse.json();
-        console.log('Token response:', tokenData);
+        const cleanAddress = address.trim();
+        // Add logging to see what URL we're hitting
+        console.log('Fetching token info for:', cleanAddress);
+        
+        const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`);
+        
+        // Log the response status and type
+        console.log('Response status:', response.status);
+        console.log('Content-Type:', response.headers.get('content-type'));
 
-        if (tokenData.pairs && tokenData.pairs.length > 0) {
-            // Find the pair with the highest liquidity
-            const bestPair = tokenData.pairs.reduce((best: any, current: any) => {
-                return (best.liquidity?.usd || 0) > (current.liquidity?.usd || 0) ? best : current;
-            }, tokenData.pairs[0]);
-
-            console.log('Best pair found:', bestPair);
-
-            // Determine if the token is baseToken or quoteToken
-            const isBase = bestPair.baseToken.address.toLowerCase() === address.toLowerCase();
-            const token = isBase ? bestPair.baseToken : bestPair.quoteToken;
-
-            return {
-                name: token.name,
-                symbol: token.symbol,
-                address: token.address
-            };
+        // Check if response is ok
+        if (!response.ok) {
+            throw new Error(`API request failed with status ${response.status}`);
         }
 
-        // If not found as token, try as pair
-        const pairResponse = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${address}`);
-        const pairData = await pairResponse.json();
-        console.log('Pair response:', pairData);
-
-        if (pairData.pairs && pairData.pairs[0]) {
-            const pair = pairData.pairs[0];
-            // Default to baseToken
-            const token = pair.baseToken;
-
-            return {
-                name: token.name,
-                symbol: token.symbol,
-                address: token.address
-            };
+        // Ensure we're getting JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType?.includes('application/json')) {
+            throw new Error(`Expected JSON but got ${contentType}`);
         }
 
-        // If still not found, try one more time with modified address format
-        // Sometimes DEXScreener needs the address without any wrapping
-        const cleanAddress = address.replace(/[^a-zA-Z0-9]/g, '');
-        const finalResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`);
-        const finalData = await finalResponse.json();
-        console.log('Final attempt response:', finalData);
-
-        if (finalData.pairs && finalData.pairs[0]) {
-            const token = finalData.pairs[0].baseToken;
-            return {
-                name: token.name,
-                symbol: token.symbol,
-                address: token.address
-            };
+        const data = await response.json();
+        
+        // Validate the response data
+        if (!data || !data.pairs || !data.pairs[0]) {
+            throw new Error('Invalid response format from DEXScreener');
         }
 
-        console.log('No token data found after all attempts');
-        return null;
+        return data;
     } catch (error) {
-        console.error('Error fetching token:', error);
-        return null;
+        console.error('Token fetch error:', error);
+        // Re-throw with a user-friendly message
+        throw new Error('Failed to fetch token information. Please try again.');
     }
 };
 
@@ -1131,54 +1100,44 @@ const SubwalletsPage: FC = () => {
 
     // Single function to handle token fetching
     const handleTokenFetch = async () => {
-        if (!inputValue.trim() || isLoading) return;
-
+        if (!inputValue) return;
+        
         setIsLoading(true);
         try {
-            console.log('Fetching token info for:', inputValue);
-            const address = extractAddress(inputValue);
-            
+            // Extract address from URL if needed
+            const address = inputValue.includes('dexscreener.com') 
+                ? inputValue.split('/').pop() 
+                : inputValue;
+
             if (!address) {
-                console.log('Invalid address format');
-                return;
+                throw new Error('Invalid token address');
             }
 
-            // Fetch from DEXScreener
-            const response = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${address}`);
-            const data = await response.json();
-            console.log('DEXScreener response:', data);
+            const data = await fetchTokenInfo(address);
+            
+            // Update token info with proper null checks
+            setTokenInfo({
+                name: data.pairs[0]?.baseToken?.name || 'Unknown',
+                symbol: data.pairs[0]?.baseToken?.symbol || 'Unknown',
+                address: data.pairs[0]?.baseToken?.address || address
+            });
 
-            if (data.pairs && data.pairs[0]) {
-                const pair = data.pairs[0];
-                const token = pair.baseToken;
-
-                // Set token info
-                setTokenInfo({
-                    name: token.name,
-                    symbol: token.symbol,
-                    address: token.address
-                });
-
-                // Set token stats
+            // Update token stats if available
+            if (data.pairs[0]) {
                 setTokenStats({
-                    price: {
-                        usd: parseFloat(pair.priceUsd || '0'),
-                        sol: parseFloat(pair.priceNative || '0')
-                    },
-                    changes: {
-                        m5: pair.priceChange?.m5 || 0,
-                        h1: pair.priceChange?.h1 || 0,
-                        h6: pair.priceChange?.h6 || 0,
-                        h24: pair.priceChange?.h24 || 0
-                    },
-                    volume: pair.volume?.h24 || 0,
-                    txns: pair.txns?.h24 || { buys: 0, sells: 0 }
+                    price: data.pairs[0].priceUsd || '0',
+                    volume: data.pairs[0].volume || '0',
+                    transactions: {
+                        total: data.pairs[0].txns?.h24 || 0,
+                        buys: data.pairs[0].txns?.h24Buy || 0,
+                        sells: data.pairs[0].txns?.h24Sell || 0
+                    }
                 });
-
-                console.log('Successfully set token info and stats');
             }
         } catch (error) {
-            console.error('Error fetching token:', error);
+            console.error('Error in handleTokenFetch:', error);
+            // Show error to user (you'll need to add error state management)
+            setError(error.message);
         } finally {
             setIsLoading(false);
         }
