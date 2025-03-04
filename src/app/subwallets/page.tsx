@@ -3,13 +3,14 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { FC, useState, useEffect, useRef, ChangeEvent, KeyboardEvent, FormEvent } from 'react';
-import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } from '@solana/web3.js';
+import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl, Transaction, SystemProgram } from '@solana/web3.js';
 import { derivePath } from 'ed25519-hd-key';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import dynamic from 'next/dynamic';
 import { ActionModal, ActionType } from '@/components/ActionModal';
 import { FundModal } from '@/components/modals/FundModal';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { useConnection } from '@solana/wallet-adapter-react';
 
 // Dynamically import WalletMultiButton with ssr disabled
 const WalletMultiButtonDynamic = dynamic(
@@ -27,14 +28,23 @@ interface Subwallet {
     isLoading?: boolean;
 }
 
+interface FundingProgress {
+    stage: 'preparing' | 'processing' | 'confirming' | 'complete';
+    currentBatch: number;
+    totalBatches: number;
+    processedWallets: number;
+    totalWallets: number;
+    error?: string;
+}
+
 const SubwalletsPage: FC = () => {
-    const { publicKey, signMessage } = useWallet();
+    const { publicKey, signMessage, sendTransaction } = useWallet();
+    const { connection } = useConnection();
     const [mounted, setMounted] = useState(false);
     const [subwallets, setSubwallets] = useState<Subwallet[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [copiedType, setCopiedType] = useState<'public' | 'private' | null>(null);
-    const [connection] = useState(new Connection(clusterApiUrl('devnet'), 'confirmed'));
     const [caAddress, setCaAddress] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [loadingAction, setLoadingAction] = useState<'refreshing' | 'restoring' | null>(null);
@@ -43,6 +53,14 @@ const SubwalletsPage: FC = () => {
     const [pendingCa, setPendingCa] = useState<string>('');
     const [hasGeneratedWallets, setHasGeneratedWallets] = useState(false);
     const [modalType, setModalType] = useState<'fund' | 'recoverSol' | 'recoverCA' | null>(null);
+    const [progress, setProgress] = useState<FundingProgress>({
+        stage: 'preparing',
+        currentBatch: 0,
+        totalBatches: 0,
+        processedWallets: 0,
+        totalWallets: 0
+    });
+    const [isProcessing, setIsProcessing] = useState(false);
 
     useEffect(() => {
         setMounted(true);
@@ -470,22 +488,184 @@ const SubwalletsPage: FC = () => {
         return `${first4}...${last4}`;
     };
 
-    const handleFundSubwallets = async (params: FundParameters) => {
-        const { distributionPlan, totalFees } = params;
-        
+    const handleFundSubwallets = async (params: {
+        totalBudget: number;
+        walletsToFund: number;
+        isRandom: boolean;
+        minAmount?: number;
+        maxAmount?: number;
+    }) => {
+        const [progress, setProgress] = useState<FundingProgress>({
+            stage: 'preparing',
+            currentBatch: 0,
+            totalBatches: 0,
+            processedWallets: 0,
+            totalWallets: 0
+        });
+        const [isProcessing, setIsProcessing] = useState(false);
+
         try {
-            // TODO: Implement the actual funding transactions
-            console.log('Distribution plan:', distributionPlan);
-            console.log('Total fees:', totalFees);
-            
-            // For each wallet in the distribution plan:
-            // 1. Create and sign transaction
-            // 2. Send and confirm transaction
-            // 3. Update UI with success/failure
-            
+            if (!publicKey || !subwallets.length) {
+                throw new Error('Wallet not connected or no subwallets available');
+            }
+
+            setIsProcessing(true);
+            setProgress({
+                stage: 'preparing',
+                currentBatch: 0,
+                totalBatches: 0,
+                processedWallets: 0,
+                totalWallets: params.walletsToFund
+            });
+
+            // Validate total budget
+            const balance = await connection.getBalance(publicKey);
+            const totalSol = params.totalBudget;
+            if (balance < totalSol * LAMPORTS_PER_SOL) {
+                throw new Error(`Insufficient balance. Need ${totalSol} SOL but wallet has ${balance / LAMPORTS_PER_SOL} SOL`);
+            }
+
+            // Calculate amounts
+            let amounts: number[] = [];
+            try {
+                if (params.isRandom) {
+                    if (params.minAmount! * params.walletsToFund > params.totalBudget) {
+                        throw new Error('Total budget too low for minimum amounts');
+                    }
+                    if (params.minAmount! > params.maxAmount!) {
+                        throw new Error('Minimum amount cannot be greater than maximum amount');
+                    }
+
+                    let remaining = params.totalBudget;
+                    for (let i = 0; i < params.walletsToFund - 1; i++) {
+                        const max = Math.min(
+                            params.maxAmount!,
+                            remaining - (params.minAmount! * (params.walletsToFund - i - 1))
+                        );
+                        const amount = params.minAmount! + Math.random() * (max - params.minAmount!);
+                        amounts.push(Number(amount.toFixed(4)));
+                        remaining -= amount;
+                    }
+                    amounts.push(Number(remaining.toFixed(4)));
+                } else {
+                    const amount = params.totalBudget / params.walletsToFund;
+                    amounts = Array(params.walletsToFund).fill(Number(amount.toFixed(4)));
+                }
+            } catch (error) {
+                throw new Error(`Failed to calculate distribution: ${error.message}`);
+            }
+
+            // Process in batches
+            const BATCH_SIZE = 2;
+            const walletsToFund = subwallets.slice(0, params.walletsToFund);
+            const totalBatches = Math.ceil(walletsToFund.length / BATCH_SIZE);
+
+            setProgress(prev => ({
+                ...prev,
+                stage: 'processing',
+                totalBatches
+            }));
+
+            for (let i = 0; i < walletsToFund.length; i += BATCH_SIZE) {
+                try {
+                    const batch = walletsToFund.slice(i, i + BATCH_SIZE);
+                    const batchAmounts = amounts.slice(i, i + BATCH_SIZE);
+                    
+                    setProgress(prev => ({
+                        ...prev,
+                        currentBatch: Math.floor(i / BATCH_SIZE) + 1,
+                        processedWallets: i
+                    }));
+
+                    const transaction = new Transaction();
+                    
+                    batch.forEach((wallet, index) => {
+                        transaction.add(
+                            SystemProgram.transfer({
+                                fromPubkey: publicKey,
+                                toPubkey: new PublicKey(wallet.publicKey),
+                                lamports: batchAmounts[index] * LAMPORTS_PER_SOL
+                            })
+                        );
+                    });
+
+                    // Get latest blockhash with retry
+                    let latestBlockhash;
+                    for (let retry = 0; retry < 3; retry++) {
+                        try {
+                            latestBlockhash = await connection.getLatestBlockhash('confirmed');
+                            break;
+                        } catch (error) {
+                            if (retry === 2) throw error;
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                        }
+                    }
+
+                    transaction.recentBlockhash = latestBlockhash.blockhash;
+                    transaction.feePayer = publicKey;
+
+                    setProgress(prev => ({ ...prev, stage: 'confirming' }));
+
+                    // Send and confirm with timeout
+                    const signature = await Promise.race([
+                        sendTransaction(transaction, connection),
+                        new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Transaction timeout')), 30000)
+                        )
+                    ]);
+
+                    // Wait for confirmation with progress updates
+                    let confirmed = false;
+                    for (let attempt = 0; attempt < 30 && !confirmed; attempt++) {
+                        const confirmation = await connection.getSignatureStatus(signature);
+                        if (confirmation.value?.confirmationStatus === 'confirmed') {
+                            confirmed = true;
+                        } else {
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                        }
+                    }
+
+                    if (!confirmed) {
+                        throw new Error('Transaction confirmation timeout');
+                    }
+
+                    // Update balances
+                    setSubwallets(current => {
+                        const updated = [...current];
+                        batch.forEach((wallet, index) => {
+                            const walletIndex = subwallets.findIndex(w => w.publicKey === wallet.publicKey);
+                            if (walletIndex !== -1) {
+                                updated[walletIndex] = {
+                                    ...updated[walletIndex],
+                                    solBalance: (parseFloat(updated[walletIndex].solBalance || '0') + batchAmounts[index]).toFixed(4)
+                                };
+                            }
+                        });
+                        return updated;
+                    });
+
+                    setProgress(prev => ({
+                        ...prev,
+                        processedWallets: i + batch.length
+                    }));
+
+                    // Delay between batches
+                    if (i + BATCH_SIZE < walletsToFund.length) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+                } catch (error) {
+                    throw new Error(`Batch ${Math.floor(i / BATCH_SIZE) + 1} failed: ${error.message}`);
+                }
+            }
+
+            setProgress(prev => ({ ...prev, stage: 'complete' }));
+            setTimeout(() => setModalType(null), 2000);
+
         } catch (error) {
             console.error('Funding failed:', error);
-            throw new Error('Failed to fund wallets. Please try again.');
+            setProgress(prev => ({ ...prev, error: error.message }));
+        } finally {
+            setIsProcessing(false);
         }
     };
 
@@ -656,7 +836,9 @@ const SubwalletsPage: FC = () => {
                 onConfirm={handleFundSubwallets}
                 totalSubwallets={subwallets.length}
                 subwallets={subwallets}
-            />
+            >
+                <ProgressIndicator progress={progress} />
+            </FundModal>
 
             {/* Recover SOL Modal */}
             {modalType === 'recoverSol' && (
@@ -772,6 +954,57 @@ const SubwalletsPage: FC = () => {
                             </table>
                         </div>
                     </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ProgressIndicator = ({ progress }: { progress: FundingProgress }) => {
+    return (
+        <div className="mt-4 bg-gray-700/50 rounded p-4 space-y-3">
+            <div className="flex justify-between text-sm">
+                <span>
+                    {progress.stage === 'preparing' && 'Preparing transactions...'}
+                    {progress.stage === 'processing' && 'Processing transactions...'}
+                    {progress.stage === 'confirming' && 'Confirming transactions...'}
+                    {progress.stage === 'complete' && 'Funding complete!'}
+                </span>
+                <span>
+                    {progress.processedWallets}/{progress.totalWallets} wallets
+                </span>
+            </div>
+
+            <div className="w-full bg-gray-700 rounded-full h-2">
+                <div
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                        progress.stage === 'complete' 
+                            ? 'bg-green-500' 
+                            : progress.error 
+                                ? 'bg-red-500'
+                                : 'bg-yellow-600'
+                    }`}
+                    style={{
+                        width: `${(progress.processedWallets / progress.totalWallets) * 100}%`
+                    }}
+                />
+            </div>
+
+            {progress.error && (
+                <div className="text-red-400 bg-red-900/20 rounded p-3 text-sm">
+                    ⚠️ {progress.error}
+                    <button
+                        onClick={() => setProgress(prev => ({ ...prev, error: undefined }))}
+                        className="ml-2 text-red-400 hover:text-red-300"
+                    >
+                        Try Again
+                    </button>
+                </div>
+            )}
+
+            {progress.stage === 'complete' && (
+                <div className="text-green-400 bg-green-900/20 rounded p-3 text-sm">
+                    ✅ Successfully funded {progress.totalWallets} wallets!
                 </div>
             )}
         </div>
