@@ -166,6 +166,39 @@ const SubwalletsPage: FC = () => {
         return copiedIndex === index && copiedType === type;
     };
 
+    const downloadSubwallets = () => {
+        if (!publicKey || !subwallets.length) return;
+
+        // Format wallet address for filename
+        const walletAddress = publicKey.toString();
+        const truncatedAddress = `${walletAddress.slice(0, 4)}${walletAddress.slice(-4)}`;
+        const fileName = `SNIPERFI_Subwallets_${truncatedAddress}.json`;
+
+        // Prepare data for export
+        const exportData = {
+            parentWallet: publicKey.toString(),
+            generatedAt: new Date().toISOString(),
+            subwallets: subwallets.map(wallet => ({
+                index: wallet.index,
+                publicKey: wallet.publicKey,
+                privateKey: wallet.privateKey,
+                solBalance: wallet.solBalance,
+                caBalance: wallet.caBalance
+            }))
+        };
+
+        // Create and trigger download
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
@@ -218,24 +251,34 @@ const SubwalletsPage: FC = () => {
                             {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
                         </button>
 
-                        <div className="flex-1">
-                            <input
-                                type="text"
-                                placeholder="Enter CA Address (optional)"
-                                value={caAddress}
-                                onChange={(e) => setCaAddress(e.target.value)}
-                                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
-                            />
-                        </div>
-
                         {subwallets.length > 0 && (
-                            <button
-                                onClick={() => fetchBalances(subwallets)}
-                                disabled={isLoading}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isLoading ? 'Refreshing...' : 'Refresh Balances'}
-                            </button>
+                            <>
+                                <button
+                                    onClick={downloadSubwallets}
+                                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded flex items-center space-x-2"
+                                >
+                                    <span>Download Subwallets</span>
+                                    <span>📥</span>
+                                </button>
+
+                                <div className="flex-1">
+                                    <input
+                                        type="text"
+                                        placeholder="Enter CA Address (optional)"
+                                        value={caAddress}
+                                        onChange={(e) => setCaAddress(e.target.value)}
+                                        className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
+                                    />
+                                </div>
+
+                                <button
+                                    onClick={() => fetchBalances(subwallets)}
+                                    disabled={isLoading}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isLoading ? 'Refreshing...' : 'Refresh Balances'}
+                                </button>
+                            </>
                         )}
                     </div>
 
