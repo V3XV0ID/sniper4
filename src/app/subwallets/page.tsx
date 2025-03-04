@@ -8,6 +8,8 @@ import { derivePath } from 'ed25519-hd-key';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import dynamic from 'next/dynamic';
 import { ActionModal, ActionType } from '@/components/ActionModal';
+import { FundModal } from '@/components/modals/FundModal';
+import { LoadingSpinner } from '@/components/LoadingSpinner';
 
 // Dynamically import WalletMultiButton with ssr disabled
 const WalletMultiButtonDynamic = dynamic(
@@ -34,13 +36,13 @@ const SubwalletsPage: FC = () => {
     const [copiedType, setCopiedType] = useState<'public' | 'private' | null>(null);
     const [connection] = useState(new Connection(clusterApiUrl('devnet'), 'confirmed'));
     const [caAddress, setCaAddress] = useState<string>('');
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
     const [loadingAction, setLoadingAction] = useState<'refreshing' | 'restoring' | null>(null);
     const [error, setError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [pendingCa, setPendingCa] = useState<string>('');
     const [hasGeneratedWallets, setHasGeneratedWallets] = useState(false);
-    const [modalAction, setModalAction] = useState<ActionType | null>(null);
+    const [modalType, setModalType] = useState<'fund' | 'recoverSol' | 'recoverCA' | null>(null);
 
     useEffect(() => {
         setMounted(true);
@@ -90,6 +92,15 @@ const SubwalletsPage: FC = () => {
             setSubwallets([]);
         }
     }, [publicKey]);
+
+    // Auto-hide loading after a brief moment
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setIsLoading(false);
+        }, 500); // Half second loading state max
+
+        return () => clearTimeout(timer);
+    }, []);
 
     const truncateKey = (key: string) => {
         if (key.length <= 8) return key;
@@ -501,6 +512,10 @@ const SubwalletsPage: FC = () => {
         );
     }
 
+    if (isLoading) {
+        return <LoadingSpinner />;
+    }
+
     return (
         <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
             <div className="flex flex-wrap items-center gap-4 mb-8">
@@ -601,7 +616,7 @@ const SubwalletsPage: FC = () => {
             {publicKey && hasGeneratedWallets && (
                 <div className="flex gap-4 mb-8">
                     <button
-                        onClick={() => setModalAction('fund')}
+                        onClick={() => setModalType('fund')}
                         className="bg-yellow-600 px-4 py-2 h-10 rounded hover:bg-yellow-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length}
                     >
@@ -609,7 +624,7 @@ const SubwalletsPage: FC = () => {
                     </button>
                     
                     <button
-                        onClick={() => setModalAction('recoverSol')}
+                        onClick={() => setModalType('recoverSol')}
                         className="bg-orange-600 px-4 py-2 h-10 rounded hover:bg-orange-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length}
                     >
@@ -617,7 +632,7 @@ const SubwalletsPage: FC = () => {
                     </button>
                     
                     <button
-                        onClick={() => setModalAction('recoverCA')}
+                        onClick={() => setModalType('recoverCA')}
                         className="bg-red-600 px-4 py-2 h-10 rounded hover:bg-red-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length || !caAddress}
                     >
@@ -625,7 +640,7 @@ const SubwalletsPage: FC = () => {
                     </button>
                     
                     <button
-                        onClick={() => setModalAction('sellAll')}
+                        onClick={() => setModalType('sellAll')}
                         className="bg-pink-600 px-4 py-2 h-10 rounded hover:bg-pink-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length || !caAddress}
                     >
@@ -634,29 +649,51 @@ const SubwalletsPage: FC = () => {
                 </div>
             )}
 
-            <ActionModal
-                isOpen={modalAction !== null}
-                onClose={() => setModalAction(null)}
-                onConfirm={async (params?: FundParameters) => {
-                    switch (modalAction) {
-                        case 'fund':
-                            await handleFundSubwallets(params!);
-                            break;
-                        case 'recoverSol':
-                            await handleRecoverSol();
-                            break;
-                        case 'recoverCA':
-                            await handleRecoverCA();
-                            break;
-                        case 'sellAll':
-                            await handleSellAll();
-                            break;
-                    }
-                }}
-                action={modalAction || 'fund'}
+            {/* Fund Modal */}
+            <FundModal 
+                isOpen={modalType === 'fund'}
+                onClose={() => setModalType(null)}
+                onConfirm={handleFundSubwallets}
                 totalSubwallets={subwallets.length}
                 subwallets={subwallets}
             />
+
+            {/* Recover SOL Modal */}
+            {modalType === 'recoverSol' && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                    <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-bold">🔄 Recover SOL</h2>
+                            <button onClick={() => setModalType(null)} className="text-gray-400 hover:text-white">✕</button>
+                        </div>
+
+                        <div className="bg-gray-700/50 rounded p-4 mb-6">
+                            <p>This will recover all SOL from your subwallets back to your main wallet.</p>
+                            <p className="mt-2 text-sm text-gray-300">
+                                Total SOL to recover: {subwallets.reduce((sum, w) => sum + (parseFloat(w.solBalance) || 0), 0)} SOL
+                            </p>
+                            <p className="mt-1 text-sm text-gray-300">
+                                From {subwallets.length} subwallets
+                            </p>
+                        </div>
+
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => setModalType(null)}
+                                className="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleRecoverSol}
+                                className="px-4 py-2 bg-orange-600 rounded hover:bg-orange-500"
+                            >
+                                Recover SOL 🔄
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {publicKey && subwallets.length === 0 && (
                 <div className="text-center py-6 bg-gray-800/50 rounded-lg mt-4">
