@@ -2,7 +2,7 @@
 
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { FC, useState, useEffect, useRef, ChangeEvent } from 'react';
+import { FC, useState, useEffect, useRef, ChangeEvent, KeyboardEvent, FormEvent } from 'react';
 import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } from '@solana/web3.js';
 import { derivePath } from 'ed25519-hd-key';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
@@ -172,15 +172,13 @@ const SubwalletsPage: FC = () => {
         return copiedIndex === index && copiedType === type;
     };
 
-    const downloadSubwallets = () => {
+    const downloadSubwallets = (): void => {
         if (!publicKey || !subwallets.length) return;
 
-        // Format wallet address for filename
         const walletAddress = publicKey.toString();
         const truncatedAddress = `${walletAddress.slice(0, 4)}${walletAddress.slice(-4)}`;
         const fileName = `SNIPERFI_Subwallets_${truncatedAddress}.json`;
 
-        // Prepare data for export
         const exportData = {
             parentWallet: publicKey.toString(),
             generatedAt: new Date().toISOString(),
@@ -193,7 +191,6 @@ const SubwalletsPage: FC = () => {
             }))
         };
 
-        // Create and trigger download
         const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -205,14 +202,34 @@ const SubwalletsPage: FC = () => {
         URL.revokeObjectURL(url);
     };
 
-    const restoreSubwallets = async (event: ChangeEvent<HTMLInputElement>) => {
+    const handleCaSubmit = async (e?: FormEvent): Promise<void> => {
+        e?.preventDefault();
+        if (!pendingCa.trim()) return;
+
+        setCaAddress(pendingCa.trim());
+        if (subwallets.length > 0) {
+            await fetchBalances(subwallets);
+        }
+    };
+
+    const handleCaKeyPress = (e: KeyboardEvent<HTMLInputElement>): void => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            void handleCaSubmit();
+        }
+    };
+
+    const restoreSubwallets = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
         const file = event.target.files?.[0];
         if (!file) return;
 
         setIsRestoring(true);
         try {
             const fileContent = await file.text();
-            const jsonData = JSON.parse(fileContent);
+            const jsonData = JSON.parse(fileContent) as {
+                parentWallet: string;
+                subwallets: Subwallet[];
+            };
 
             // Validate the JSON structure
             if (!jsonData.subwallets || !Array.isArray(jsonData.subwallets)) {
@@ -227,8 +244,8 @@ const SubwalletsPage: FC = () => {
 
             const restoredWallets = jsonData.subwallets.map(wallet => ({
                 ...wallet,
-                isRevealed: false, // Reset revealed state for security
-                solBalance: 0, // Reset balances to be refreshed
+                isRevealed: false,
+                solBalance: 0,
                 caBalance: 0
             }));
 
@@ -244,23 +261,6 @@ const SubwalletsPage: FC = () => {
             if (fileInputRef.current) {
                 fileInputRef.current.value = ''; // Reset file input
             }
-        }
-    };
-
-    const handleCaSubmit = async (e?: React.FormEvent) => {
-        e?.preventDefault();
-        if (!pendingCa.trim()) return;
-
-        setCaAddress(pendingCa.trim());
-        if (subwallets.length > 0) {
-            await fetchBalances(subwallets);
-        }
-    };
-
-    const handleCaKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            handleCaSubmit();
         }
     };
 
