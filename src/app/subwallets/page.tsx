@@ -36,6 +36,7 @@ const SubwalletsPage: FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [isRestoring, setIsRestoring] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [pendingCa, setPendingCa] = useState<string>('');
 
     useEffect(() => {
         setMounted(true);
@@ -246,6 +247,23 @@ const SubwalletsPage: FC = () => {
         }
     };
 
+    const handleCaSubmit = async (e?: React.FormEvent) => {
+        e?.preventDefault();
+        if (!pendingCa.trim()) return;
+
+        setCaAddress(pendingCa.trim());
+        if (subwallets.length > 0) {
+            await fetchBalances(subwallets);
+        }
+    };
+
+    const handleCaKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleCaSubmit();
+        }
+    };
+
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
@@ -327,21 +345,49 @@ const SubwalletsPage: FC = () => {
                             </button>
                         </div>
 
-                        <div className="flex-1">
+                        <div className="flex-1 flex space-x-2">
                             <input
                                 type="text"
                                 placeholder="Enter CA Address (optional)"
-                                value={caAddress}
-                                onChange={(e) => setCaAddress(e.target.value)}
-                                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
+                                value={pendingCa}
+                                onChange={(e) => setPendingCa(e.target.value)}
+                                onKeyPress={handleCaKeyPress}
+                                className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
                             />
+                            <button
+                                onClick={() => handleCaSubmit()}
+                                disabled={!pendingCa.trim()}
+                                className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                            >
+                                <span>Enter</span>
+                                <span>↵</span>
+                            </button>
                         </div>
+
+                        {caAddress && (
+                            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex items-center justify-between">
+                                <div>
+                                    <p className="text-gray-300">Current CA Address:</p>
+                                    <p className="font-mono text-white">{truncateKey(caAddress)}</p>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        setCaAddress('');
+                                        setPendingCa('');
+                                    }}
+                                    className="text-gray-400 hover:text-white transition-colors"
+                                    title="Clear CA Address"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        )}
 
                         {subwallets.length > 0 && (
                             <button
                                 onClick={() => fetchBalances(subwallets)}
                                 disabled={isLoading}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                             >
                                 {isLoading ? 'Refreshing...' : 'Refresh Balances'}
                             </button>
