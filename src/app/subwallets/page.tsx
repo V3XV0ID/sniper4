@@ -17,6 +17,7 @@ const SubwalletsPage: FC = () => {
     const { publicKey, signMessage } = useWallet();
     const [subwallets, setSubwallets] = useState<Subwallet[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
     const generateSubwallets = async () => {
         if (!publicKey || !signMessage) return;
@@ -55,9 +56,11 @@ const SubwalletsPage: FC = () => {
         ));
     };
 
-    const copyToClipboard = async (text: string) => {
+    const copyToClipboard = async (text: string, index: number) => {
         try {
             await navigator.clipboard.writeText(text);
+            setCopiedIndex(index);
+            setTimeout(() => setCopiedIndex(null), 2000); // Reset after 2 seconds
         } catch (err) {
             console.error('Failed to copy:', err);
         }
@@ -96,7 +99,7 @@ const SubwalletsPage: FC = () => {
                                             <tr>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Index</th>
                                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Public Key</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key</th>
+                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key (Click to Reveal)</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-700">
@@ -109,37 +112,44 @@ const SubwalletsPage: FC = () => {
                                                         <div className="flex items-center space-x-2">
                                                             <span className="truncate max-w-md">{wallet.publicKey}</span>
                                                             <button
-                                                                onClick={() => copyToClipboard(wallet.publicKey)}
-                                                                className="text-gray-400 hover:text-white"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    copyToClipboard(wallet.publicKey, wallet.index);
+                                                                }}
+                                                                className="text-gray-400 hover:text-white transition-colors"
                                                                 title="Copy public key"
                                                             >
-                                                                📋
+                                                                {copiedIndex === wallet.index ? '✓' : '📋'}
                                                             </button>
                                                         </div>
                                                     </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">
+                                                    <td 
+                                                        onClick={() => toggleReveal(wallet.index)}
+                                                        className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300 cursor-pointer hover:bg-gray-600 transition-colors group"
+                                                    >
                                                         <div className="flex items-center space-x-2">
-                                                            <button
-                                                                onClick={() => toggleReveal(wallet.index)}
-                                                                className="text-gray-400 hover:text-white mr-2"
-                                                                title={wallet.isRevealed ? "Hide private key" : "Reveal private key"}
-                                                            >
-                                                                {wallet.isRevealed ? '👁️' : '🔒'}
-                                                            </button>
-                                                            {wallet.isRevealed ? (
-                                                                <>
-                                                                    <span className="truncate max-w-md">{wallet.privateKey}</span>
-                                                                    <button
-                                                                        onClick={() => copyToClipboard(wallet.privateKey)}
-                                                                        className="text-gray-400 hover:text-white"
-                                                                        title="Copy private key"
-                                                                    >
-                                                                        📋
-                                                                    </button>
-                                                                </>
-                                                            ) : (
-                                                                <span className="text-gray-500">••••••••</span>
-                                                            )}
+                                                            <div className="flex-1">
+                                                                {wallet.isRevealed ? (
+                                                                    <div className="flex items-center space-x-2">
+                                                                        <span className="truncate max-w-md">{wallet.privateKey}</span>
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                copyToClipboard(wallet.privateKey, wallet.index);
+                                                                            }}
+                                                                            className="text-gray-400 hover:text-white transition-colors"
+                                                                            title="Copy private key"
+                                                                        >
+                                                                            {copiedIndex === wallet.index ? '✓' : '📋'}
+                                                                        </button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="flex items-center space-x-2">
+                                                                        <span className="text-gray-500">Click to reveal</span>
+                                                                        <span className="text-gray-500 group-hover:text-white transition-colors">🔒</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </td>
                                                 </tr>
