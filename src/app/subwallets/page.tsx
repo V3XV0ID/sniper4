@@ -1150,18 +1150,18 @@ const SubwalletsPage: FC = () => {
         setError(null);
 
         try {
-            // Extract address from input
-            let address = inputValue.trim();
-            
-            if (address.includes('dexscreener.com')) {
-                const parts = address.split('/');
-                address = parts[parts.length - 1];
-            }
-
-            console.log('Processing address:', address);
+            let address = extractAddress(inputValue);
+            if (!address) throw new Error('Invalid address or URL');
 
             const data = await fetchTokenInfo(address);
-            
+
+            if (!data || data.isNew) {
+                setError('Token not found or new token detected. Proceed with caution.');
+                setTokenInfo(null);
+                setTokenStats(null);
+                return;
+            }
+
             setTokenInfo({
                 name: data.name,
                 symbol: data.symbol,
@@ -1171,25 +1171,15 @@ const SubwalletsPage: FC = () => {
             setTokenStats({
                 price: data.price,
                 volume: data.volume,
-                transactions: {
-                    total: 0,
-                    buys: 0,
-                    sells: 0,
-                    buyers: 0,
-                    sellers: 0
-                }
+                transactions: data.transactions || { total: 0, buys: 0, sells: 0, buyers: 0, sellers: 0 }
             });
 
-            // If it's a new token, show a warning but don't block the operation
-            if (data.isNew) {
-                setError('Token not found on DEXScreener. This might be a new token.');
-            }
-
-            console.log('Token info set:', data);
-
+            setError(null);
         } catch (error) {
-            console.error('Error in handleTokenFetch:', error);
-            setError('Failed to fetch token info, but you can still proceed.');
+            console.error('Error fetching token info:', error);
+            setError('Failed to fetch token info. Please check the address and try again.');
+            setTokenInfo(null);
+            setTokenStats(null);
         } finally {
             setIsLoading(false);
         }
@@ -1701,9 +1691,9 @@ const SubwalletsPage: FC = () => {
 
                 <button
                     onClick={handleBuyAll}
-                    disabled={(!tokenInfo?.address && !isTestnet) || isBuying}
+                    disabled={isLoading || !subwallets.length || !tokenInfo?.address || (!isTestnet && (!mainnetBalance || mainnetBalance <= 0))}
                     className={`px-4 py-2 rounded ${
-                        (!tokenInfo?.address && !isTestnet) || isBuying
+                        isLoading || !subwallets.length || (!isTestnet && (!mainnetBalance || mainnetBalance <= 0))
                             ? 'bg-gray-500 cursor-not-allowed'
                             : 'bg-pink-500 hover:bg-pink-600'
                     } text-white flex items-center gap-2`}
@@ -1714,7 +1704,7 @@ const SubwalletsPage: FC = () => {
                             Buying ({buyProgress?.processedWallets}/{buyProgress?.totalWallets})
                         </>
                     ) : (
-                        'BUY ALL 🚀'
+                        'BUY ALL 💸'
                     )}
                 </button>
             </div>
@@ -1834,6 +1824,18 @@ const SubwalletsPage: FC = () => {
                         )}
                     </div>
                 </div>
+            )}
+
+            {/* Conditional rendering for modals */}
+            {modalType === 'fund' && (
+                <FundModal onClose={() => setModalType(null)} />
+            )}
+
+            {['recoverSol', 'recoverCA', 'sellAll'].includes(modalType || '') && (
+                <ActionModal 
+                    type={modalType as ActionType} 
+                    onClose={() => setModalType(null)} 
+                />
             )}
         </div>
     );
