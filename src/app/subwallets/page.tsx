@@ -7,6 +7,7 @@ import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } from 
 import { derivePath } from 'ed25519-hd-key';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import dynamic from 'next/dynamic';
+import { ActionModal, ActionType } from '@/components/ActionModal';
 
 // Dynamically import WalletMultiButton with ssr disabled
 const WalletMultiButtonDynamic = dynamic(
@@ -21,6 +22,7 @@ interface Subwallet {
     isRevealed: boolean;
     solBalance: number;
     caBalance: number;
+    isLoading?: boolean;
 }
 
 const SubwalletsPage: FC = () => {
@@ -38,6 +40,7 @@ const SubwalletsPage: FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [pendingCa, setPendingCa] = useState<string>('');
     const [hasGeneratedWallets, setHasGeneratedWallets] = useState(false);
+    const [modalAction, setModalAction] = useState<ActionType | null>(null);
 
     useEffect(() => {
         setMounted(true);
@@ -377,55 +380,70 @@ const SubwalletsPage: FC = () => {
         setError(null);
 
         try {
-            // Use a different RPC endpoint to avoid rate limits
             const connection = new Connection(
                 'https://api.mainnet-beta.solana.com',
                 'confirmed'
             );
 
-            const updatedSubwallets = [...subwallets];
-            
-            // Process in smaller batches
-            const batchSize = 2;
-            for (let i = 0; i < updatedSubwallets.length; i += batchSize) {
-                const batch = updatedSubwallets.slice(i, i + batchSize);
-                
-                try {
-                    await Promise.all(
-                        batch.map(async (wallet, index) => {
-                            try {
-                                const solBalance = await connection.getBalance(
-                                    new PublicKey(wallet.publicKey)
-                                );
-                                updatedSubwallets[i + index].solBalance = 
-                                    (solBalance / LAMPORTS_PER_SOL).toFixed(4);
+            const updatedSubwallets = subwallets.map(wallet => ({
+                ...wallet,
+                isLoading: true,
+                solBalance: '...',
+                caBalance: caAddress ? '...' : '0'
+            }));
+            setSubwallets(updatedSubwallets);
 
-                                if (caAddress) {
-                                    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-                                        new PublicKey(wallet.publicKey),
-                                        { mint: new PublicKey(caAddress) }
-                                    );
-                                    
-                                    const balance = tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0;
-                                    updatedSubwallets[i + index].caBalance = balance.toString();
-                                }
-                            } catch (err) {
-                                console.error(`Error fetching balance for wallet ${i + index}:`, err);
-                                updatedSubwallets[i + index].solBalance = 'Error';
-                                updatedSubwallets[i + index].caBalance = 'Error';
-                            }
-                        })
-                    );
+            // Process in parallel with individual loading states
+            await Promise.all(
+                updatedSubwallets.map(async (wallet, index) => {
+                    try {
+                        const solBalance = await connection.getBalance(
+                            new PublicKey(wallet.publicKey)
+                        );
+                        
+                        // Update individual wallet
+                        setSubwallets(current => {
+                            const updated = [...current];
+                            updated[index] = {
+                                ...updated[index],
+                                solBalance: (solBalance / LAMPORTS_PER_SOL).toFixed(4),
+                                isLoading: caAddress ? true : false // Keep loading if fetching CA
+                            };
+                            return updated;
+                        });
 
-                    // Update state after each batch
-                    setSubwallets([...updatedSubwallets]);
-                } catch (batchErr) {
-                    console.error('Batch error:', batchErr);
-                }
-
-                // Add delay between batches to avoid rate limits
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
+                        if (caAddress) {
+                            const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+                                new PublicKey(wallet.publicKey),
+                                { mint: new PublicKey(caAddress) }
+                            );
+                            
+                            // Update CA balance
+                            setSubwallets(current => {
+                                const updated = [...current];
+                                updated[index] = {
+                                    ...updated[index],
+                                    caBalance: (tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0).toString(),
+                                    isLoading: false
+                                };
+                                return updated;
+                            });
+                        }
+                    } catch (err) {
+                        console.error(`Error fetching balance for wallet ${index}:`, err);
+                        setSubwallets(current => {
+                            const updated = [...current];
+                            updated[index] = {
+                                ...updated[index],
+                                solBalance: 'Error',
+                                caBalance: 'Error',
+                                isLoading: false
+                            };
+                            return updated;
+                        });
+                    }
+                })
+            );
         } catch (err) {
             console.error('Error refreshing balances:', err);
             setError('Failed to refresh balances. Please try again.');
@@ -441,24 +459,38 @@ const SubwalletsPage: FC = () => {
         return `${first4}...${last4}`;
     };
 
-    const fundSubwallets = async () => {
-        // Implementation for funding subwallets
-        console.log('Funding subwallets...');
+    const handleFundSubwallets = async (params: FundParameters) => {
+        const { distributionPlan, totalFees } = params;
+        
+        try {
+            // TODO: Implement the actual funding transactions
+            console.log('Distribution plan:', distributionPlan);
+            console.log('Total fees:', totalFees);
+            
+            // For each wallet in the distribution plan:
+            // 1. Create and sign transaction
+            // 2. Send and confirm transaction
+            // 3. Update UI with success/failure
+            
+        } catch (error) {
+            console.error('Funding failed:', error);
+            throw new Error('Failed to fund wallets. Please try again.');
+        }
     };
 
-    const recoverSOL = async () => {
-        // Implementation for recovering SOL
-        console.log('Recovering SOL...');
+    const handleRecoverSol = async () => {
+        // Implementation coming soon
+        console.log('Recovering SOL');
     };
 
-    const recoverCA = async () => {
-        // Implementation for recovering CA tokens
-        console.log('Recovering CA tokens...');
+    const handleRecoverCA = async () => {
+        // Implementation coming soon
+        console.log('Recovering CA tokens');
     };
 
-    const sellAll = async () => {
-        // Implementation for selling all tokens
-        console.log('Selling all tokens...');
+    const handleSellAll = async () => {
+        // Implementation coming soon
+        console.log('Selling all tokens');
     };
 
     if (!mounted) {
@@ -569,39 +601,62 @@ const SubwalletsPage: FC = () => {
             {publicKey && hasGeneratedWallets && (
                 <div className="flex gap-4 mb-8">
                     <button
-                        onClick={() => void fundSubwallets()}
+                        onClick={() => setModalAction('fund')}
+                        className="bg-yellow-600 px-4 py-2 h-10 rounded hover:bg-yellow-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length}
-                        className="bg-yellow-600 hover:bg-yellow-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                        <span>Fund Subwallets with SOL</span>
-                        <span>💰</span>
+                        Fund Subwallets with SOL 💰
                     </button>
+                    
                     <button
-                        onClick={() => void recoverSOL()}
+                        onClick={() => setModalAction('recoverSol')}
+                        className="bg-orange-600 px-4 py-2 h-10 rounded hover:bg-orange-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length}
-                        className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                        <span>Recover SOL from Subwallets</span>
-                        <span>🔄</span>
+                        Recover SOL from Subwallets 🔄
                     </button>
+                    
                     <button
-                        onClick={() => void recoverCA()}
+                        onClick={() => setModalAction('recoverCA')}
+                        className="bg-red-600 px-4 py-2 h-10 rounded hover:bg-red-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length || !caAddress}
-                        className="bg-red-600 hover:bg-red-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                        <span>Recover CA tokens from Subwallets</span>
-                        <span>🔄</span>
+                        Recover CA tokens from Subwallets 🔄
                     </button>
+                    
                     <button
-                        onClick={() => void sellAll()}
+                        onClick={() => setModalAction('sellAll')}
+                        className="bg-pink-600 px-4 py-2 h-10 rounded hover:bg-pink-500 transition-colors disabled:opacity-50"
                         disabled={isLoading || !subwallets.length || !caAddress}
-                        className="bg-pink-600 hover:bg-pink-700 text-white font-bold px-4 h-10 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                        <span>SELL ALL</span>
-                        <span>💸</span>
+                        SELL ALL 💸
                     </button>
                 </div>
             )}
+
+            <ActionModal
+                isOpen={modalAction !== null}
+                onClose={() => setModalAction(null)}
+                onConfirm={async (params?: FundParameters) => {
+                    switch (modalAction) {
+                        case 'fund':
+                            await handleFundSubwallets(params!);
+                            break;
+                        case 'recoverSol':
+                            await handleRecoverSol();
+                            break;
+                        case 'recoverCA':
+                            await handleRecoverCA();
+                            break;
+                        case 'sellAll':
+                            await handleSellAll();
+                            break;
+                    }
+                }}
+                action={modalAction || 'fund'}
+                totalSubwallets={subwallets.length}
+                subwallets={subwallets}
+            />
 
             {publicKey && subwallets.length === 0 && (
                 <div className="text-center py-6 bg-gray-800/50 rounded-lg mt-4">
@@ -660,8 +715,20 @@ const SubwalletsPage: FC = () => {
                                                     {formatPrivateKey(wallet.privateKey)}
                                                 </div>
                                             </td>
-                                            <td className="py-2 px-4">{wallet.solBalance} SOL</td>
-                                            <td className="py-2 px-4">{wallet.caBalance}</td>
+                                            <td className="py-2 px-4">
+                                                {wallet.isLoading ? (
+                                                    <span className="animate-pulse">Loading...</span>
+                                                ) : (
+                                                    `${wallet.solBalance} SOL`
+                                                )}
+                                            </td>
+                                            <td className="py-2 px-4">
+                                                {wallet.isLoading ? (
+                                                    <span className="animate-pulse">Loading...</span>
+                                                ) : (
+                                                    wallet.caBalance
+                                                )}
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
