@@ -2,7 +2,7 @@
 
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { FC, useState, useEffect, useRef, ChangeEvent, KeyboardEvent, FormEvent } from 'react';
+import { FC, useState, useEffect, useRef, ChangeEvent, KeyboardEvent, FormEvent, useCallback } from 'react';
 import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl, Transaction, SystemProgram } from '@solana/web3.js';
 import { derivePath } from 'ed25519-hd-key';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
@@ -37,6 +37,242 @@ interface FundingProgress {
     error?: string;
 }
 
+interface TokenInfo {
+    name: string;
+    symbol: string;
+    decimals: number;
+    address?: string;
+    logoURI?: string;
+    source: string;
+    pairAddress?: string;
+}
+
+interface JupiterToken {
+    address: string;
+    chainId: number;
+    decimals: number;
+    name: string;
+    symbol: string;
+    logoURI?: string;
+    tags?: string[];
+}
+
+interface TokenListItem {
+    address?: string;
+    mint?: string; // Some lists use 'mint' instead of 'address'
+    name: string;
+    symbol: string;
+    decimals: number;
+    logoURI?: string;
+}
+
+// Cache object for token information
+const tokenCache: { [key: string]: { data: TokenInfo; timestamp: number } } = {};
+const CACHE_DURATION = 1000 * 60 * 15; // 15 minutes
+
+const TOKEN_LIST_URLS = [
+    'https://cache.jup.ag/tokens', // Jupiter
+    'https://cdn.jsdelivr.net/gh/solana-labs/token-list@main/src/tokens/solana.tokenlist.json', // Solana
+    'https://raw.githubusercontent.com/raydium-io/raydium-ui/master/src/tokens/mainnet.json', // Raydium
+    'https://raw.githubusercontent.com/orca-so/orca-sdk/main/src/constants/tokens/mainnet.json', // Orca
+];
+
+async function getOnChainTokenInfo(
+    mintAddress: string,
+    connection: Connection
+): Promise<TokenInfo | null> {
+    try {
+        const mintPubkey = new PublicKey(mintAddress);
+        
+        // Get mint info
+        const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
+        if (!mintInfo.value) return null;
+
+        const data: any = mintInfo.value.data;
+        const decimals = data.parsed.info.decimals;
+
+        // Try to get metadata PDA
+        const metadataPDA = PublicKey.findProgramAddressSync(
+            [
+                Buffer.from('metadata'),
+                new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s').toBuffer(),
+                mintPubkey.toBuffer(),
+            ],
+            new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s')
+        )[0];
+
+        try {
+            const metadata = await connection.getParsedAccountInfo(metadataPDA);
+            if (metadata.value) {
+                const metadataData: any = metadata.value.data;
+                return {
+                    name: metadataData.data.name || 'Unknown',
+                    symbol: metadataData.data.symbol || '???',
+                    decimals,
+                    source: 'On-chain',
+                };
+            }
+        } catch (e) {
+            console.log('No metadata found for token');
+        }
+
+        return {
+            name: 'Unknown Token',
+            symbol: '???',
+            decimals,
+            source: 'On-chain Mint',
+        };
+    } catch (error) {
+        console.error('Error fetching on-chain data:', error);
+        return null;
+    }
+}
+
+async function fetchTokenList(url: string): Promise<TokenListItem[]> {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Failed to fetch from ${url}`);
+        
+        const data = await response.json();
+        
+        // Handle different token list formats
+        if (url.includes('jup.ag')) {
+            return data.tokens || [];
+        } else if (url.includes('solana-labs')) {
+            return (data.tokens || []).map((token: any) => ({
+                ...token,
+                address: token.address || token.mint
+            }));
+        } else if (url.includes('raydium')) {
+            return Object.entries(data).map(([address, token]: [string, any]) => ({
+                ...token,
+                address
+            }));
+        } else if (url.includes('orca')) {
+            return Object.entries(data).map(([address, token]: [string, any]) => ({
+                ...token,
+                address
+            }));
+        }
+        
+        return [];
+    } catch (error) {
+        console.error(`Error fetching from ${url}:`, error);
+        return [];
+    }
+}
+
+// Token Info Display Component
+function TokenInfoDisplay({ info }: { info: TokenInfo }) {
+    return (
+        <div className="bg-gray-800 rounded-lg p-3 flex items-center gap-3">
+            {info.logoURI && (
+                <img 
+                    src={info.logoURI} 
+                    alt={info.name} 
+                    className="w-6 h-6 rounded-full"
+                    onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                />
+            )}
+            <div>
+                <div className="font-semibold">{info.name}</div>
+                <div className="text-sm text-gray-400">
+                    {info.symbol}
+                    {info.address && (
+                        <span className="text-xs ml-2 text-gray-500">
+                            ({info.address.slice(0, 4)}...{info.address.slice(-4)})
+                        </span>
+                    )}
+                    <span className="text-xs ml-2 text-gray-500">
+                        via {info.source}
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// Function to extract token address from various URLs or direct input
+function extractTokenAddress(input: string): string | null {
+    try {
+        // Handle Solscan URL
+        if (input.includes('solscan.io/token/')) {
+            const parts = input.split('/token/');
+            return parts[parts.length - 1];
+        }
+        // Handle DEXScreener URL
+        else if (input.includes('dexscreener.com/solana/')) {
+            const parts = input.split('/solana/');
+            return parts[parts.length - 1];
+        }
+        // Handle direct address input
+        else {
+            return input.trim();
+        }
+    } catch (error) {
+        console.error('Error parsing input:', error);
+        return null;
+    }
+}
+
+function DexScreenerChart({ pairAddress }: { pairAddress: string }) {
+    return (
+        <div className="w-full h-[600px] bg-gray-800 rounded-lg overflow-hidden mb-6">
+            <iframe
+                src={`https://dexscreener.com/solana/${pairAddress}?embed=1&theme=dark`}
+                style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                }}
+                title="DEXScreener Chart"
+            />
+        </div>
+    );
+}
+
+async function fetchTokenInfo(tokenAddress: string): Promise<TokenInfo | null> {
+    try {
+        // Try DEXScreener first to get the pair address for the chart
+        const dexScreenerResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+        if (dexScreenerResponse.ok) {
+            const data = await dexScreenerResponse.json();
+            if (data.pairs && data.pairs[0]) {
+                const pair = data.pairs[0];
+                return {
+                    name: pair.baseToken.name,
+                    symbol: pair.baseToken.symbol,
+                    decimals: 9,
+                    address: tokenAddress,
+                    pairAddress: pair.pairAddress,
+                    source: 'DEXScreener'
+                };
+            }
+        }
+
+        // Fallback to Jupiter if DEXScreener doesn't have the token
+        const response = await fetch(`https://token.jup.ag/token/${tokenAddress}`);
+        if (response.ok) {
+            const data = await response.json();
+            return {
+                name: data.name,
+                symbol: data.symbol,
+                decimals: data.decimals || 9,
+                address: tokenAddress,
+                logoURI: data.logoURI,
+                source: 'Jupiter'
+            };
+        }
+
+        return null;
+    } catch (error) {
+        console.error('Error fetching token info:', error);
+        return null;
+    }
+}
+
 const SubwalletsPage: FC = () => {
     const { publicKey, signMessage, sendTransaction } = useWallet();
     const { connection } = useConnection();
@@ -61,6 +297,11 @@ const SubwalletsPage: FC = () => {
         totalWallets: 0
     });
     const [isProcessing, setIsProcessing] = useState(false);
+    const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
+    const [isLoadingToken, setIsLoadingToken] = useState(false);
+    const [showFundModal, setShowFundModal] = useState(false);
+    const [inputValue, setInputValue] = useState('');
+    const [displayedTokenName, setDisplayedTokenName] = useState<string>('CA Balance');
 
     useEffect(() => {
         setMounted(true);
@@ -119,6 +360,69 @@ const SubwalletsPage: FC = () => {
 
         return () => clearTimeout(timer);
     }, []);
+
+    // Add this effect to fetch token name when CA changes
+    useEffect(() => {
+        let isSubscribed = true;
+
+        const getTokenInfo = async () => {
+            if (!inputValue) {
+                setTokenInfo(null);
+                setError(null);
+                return;
+            }
+
+            setIsLoadingToken(true);
+            setError(null);
+
+            try {
+                const tokenAddress = extractTokenAddress(inputValue);
+                
+                if (!tokenAddress) {
+                    setError('Invalid token address or URL');
+                    return;
+                }
+
+                // Validate it's a valid Solana address
+                try {
+                    new PublicKey(tokenAddress);
+                } catch {
+                    setError('Invalid Solana address format');
+                    return;
+                }
+
+                const info = await fetchTokenInfo(tokenAddress);
+                
+                if (isSubscribed) {
+                    if (info) {
+                        setTokenInfo(info);
+                        setError(null);
+                        setDisplayedTokenName(`${info.symbol || info.name} Balance`);
+                    } else {
+                        setTokenInfo(null);
+                        setError('Token not found');
+                    }
+                }
+            } catch (error) {
+                if (isSubscribed) {
+                    console.error('Error:', error);
+                    setTokenInfo(null);
+                    setError('Failed to fetch token information');
+                }
+            } finally {
+                if (isSubscribed) {
+                    setIsLoadingToken(false);
+                }
+            }
+        };
+
+        const timeoutId = setTimeout(getTokenInfo, 500);
+
+        return () => {
+            isSubscribed = false;
+            clearTimeout(timeoutId);
+        };
+    }, [inputValue]);
 
     const truncateKey = (key: string) => {
         if (key.length <= 8) return key;
@@ -417,7 +721,7 @@ const SubwalletsPage: FC = () => {
             const updatedSubwallets = subwallets.map(wallet => ({
                 ...wallet,
                 isLoading: true,
-                solBalance: '...',
+                solBalance: caAddress ? '...' : '0',
                 caBalance: caAddress ? '...' : '0'
             }));
             setSubwallets(updatedSubwallets);
@@ -684,6 +988,42 @@ const SubwalletsPage: FC = () => {
         console.log('Selling all tokens');
     };
 
+    const handleEnter = async () => {
+        if (!inputValue.trim()) return;
+        
+        setIsLoadingToken(true);
+        try {
+            const tokenAddress = extractTokenAddress(inputValue);
+            if (!tokenAddress) {
+                console.error('Invalid input');
+                return;
+            }
+
+            const info = await fetchTokenInfo(tokenAddress);
+            if (info) {
+                setTokenInfo(info);
+                // Update the column title with token name/symbol
+                setDisplayedTokenName(`${info.symbol || info.name} Balance`);
+            }
+        } catch (error) {
+            console.error('Error:', error);
+        } finally {
+            setIsLoadingToken(false);
+        }
+    };
+
+    const handleClear = () => {
+        setInputValue('');
+        setTokenInfo(null);
+        setDisplayedTokenName('CA Balance');
+    };
+
+    const handleKeyPress = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            handleEnter();
+        }
+    };
+
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
@@ -776,18 +1116,30 @@ const SubwalletsPage: FC = () => {
                     </div>
 
                     <div className="flex flex-1 gap-4">
-                        <input
-                            type="text"
-                            placeholder="Enter CA Address (optional)"
-                            value={caAddress}
-                            onChange={(e) => setCaAddress(e.target.value)}
-                            className="flex-1 bg-gray-800 text-white px-4 h-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
+                        <div className="flex gap-2 items-center">
+                            <input
+                                type="text"
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                onKeyPress={handleKeyPress}
+                                placeholder="Enter DEXScreener URL or pool address"
+                                className="flex-1 bg-gray-700 rounded p-2 text-white"
+                            />
+                            {isLoadingToken ? (
+                                <span className="text-gray-400 animate-pulse">Loading...</span>
+                            ) : tokenInfo ? (
+                                <TokenInfoDisplay info={tokenInfo} />
+                            ) : inputValue && (
+                                <div className="bg-red-900/50 text-red-200 rounded-lg p-3">
+                                    Token not found
+                                </div>
+                            )}
+                        </div>
                         <button
-                            onClick={() => setCaAddress('')}
+                            onClick={handleClear}
                             className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 h-10 rounded"
                         >
-                            Enter ↵
+                            Clear ↵
                         </button>
                     </div>
                 </div>
