@@ -33,14 +33,60 @@ const SubwalletsPage: FC = () => {
     const [connection] = useState(new Connection(clusterApiUrl('devnet'), 'confirmed'));
     const [caAddress, setCaAddress] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
+    const [loadingAction, setLoadingAction] = useState<'refreshing' | 'restoring' | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [isRestoring, setIsRestoring] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [pendingCa, setPendingCa] = useState<string>('');
+    const [hasGeneratedWallets, setHasGeneratedWallets] = useState(false);
 
     useEffect(() => {
         setMounted(true);
-    }, []);
+        if (publicKey) {
+            void loadFromLocalStorage();
+        }
+    }, [publicKey]);
+
+    // Check for existing wallets when wallet connects
+    useEffect(() => {
+        if (publicKey) {
+            const checkExistingWallets = async () => {
+                try {
+                    const storedData = localStorage.getItem('sniperfi_subwallets');
+                    if (!storedData) return;
+
+                    const parsed = JSON.parse(storedData) as {
+                        parentWallet: string;
+                        subwallets: Subwallet[];
+                        timestamp: string;
+                    };
+
+                    // If we find wallets for this parent wallet
+                    if (parsed.parentWallet === publicKey.toString()) {
+                        setHasGeneratedWallets(true);
+                        const loadedWallets = parsed.subwallets.map(wallet => ({
+                            ...wallet,
+                            isRevealed: false,
+                            solBalance: 0,
+                            caBalance: 0
+                        }));
+                        setSubwallets(loadedWallets);
+                        // Fetch fresh balances
+                        await fetchBalances(loadedWallets);
+                    }
+                } catch (error) {
+                    console.error('Error checking existing wallets:', error);
+                    setError('Failed to load existing wallets');
+                    setTimeout(() => setError(null), 5000);
+                }
+            };
+
+            void checkExistingWallets();
+        } else {
+            // Reset states when wallet disconnects
+            setHasGeneratedWallets(false);
+            setSubwallets([]);
+        }
+    }, [publicKey]);
 
     const truncateKey = (key: string) => {
         if (key.length <= 8) return key;
@@ -62,60 +108,115 @@ const SubwalletsPage: FC = () => {
     };
 
     const fetchBalances = async (wallets: Subwallet[]) => {
+        setLoadingAction('refreshing');
         setIsLoading(true);
-        setError(null);
         const updatedWallets = [...wallets];
         const batchSize = 5;
         
-        for (let i = 0; i < updatedWallets.length; i += batchSize) {
-            const batch = updatedWallets.slice(i, i + batchSize);
-            await Promise.all(
-                batch.map(async (wallet) => {
-                    try {
-                        const solBalance = await fetchBalanceWithRetry(wallet.publicKey);
-                        wallet.solBalance = solBalance / LAMPORTS_PER_SOL;
+        try {
+            for (let i = 0; i < updatedWallets.length; i += batchSize) {
+                const batch = updatedWallets.slice(i, i + batchSize);
+                await Promise.all(
+                    batch.map(async (wallet) => {
+                        try {
+                            const solBalance = await fetchBalanceWithRetry(wallet.publicKey);
+                            wallet.solBalance = solBalance / LAMPORTS_PER_SOL;
 
-                        if (caAddress) {
-                            try {
-                                const tokenAccount = await connection.getParsedTokenAccountsByOwner(
-                                    new PublicKey(wallet.publicKey),
-                                    { programId: TOKEN_PROGRAM_ID }
-                                );
-                                
-                                const caAccountInfo = tokenAccount.value.find(
-                                    (acc) => acc.account.data.parsed.info.mint === caAddress
-                                );
+                            if (caAddress) {
+                                try {
+                                    const tokenAccount = await connection.getParsedTokenAccountsByOwner(
+                                        new PublicKey(wallet.publicKey),
+                                        { programId: TOKEN_PROGRAM_ID }
+                                    );
+                                    
+                                    const caAccountInfo = tokenAccount.value.find(
+                                        (acc) => acc.account.data.parsed.info.mint === caAddress
+                                    );
 
-                                wallet.caBalance = caAccountInfo 
-                                    ? Number(caAccountInfo.account.data.parsed.info.tokenAmount.uiAmount)
-                                    : 0;
-                            } catch (error) {
-                                console.warn(`Failed to fetch CA balance for wallet ${wallet.index}:`, error);
-                                wallet.caBalance = 0;
+                                    wallet.caBalance = caAccountInfo 
+                                        ? Number(caAccountInfo.account.data.parsed.info.tokenAmount.uiAmount)
+                                        : 0;
+                                } catch (error) {
+                                    console.warn(`Failed to fetch CA balance for wallet ${wallet.index}:`, error);
+                                    wallet.caBalance = 0;
+                                }
                             }
+                        } catch (error) {
+                            console.warn(`Failed to fetch balances for wallet ${wallet.index}:`, error);
+                            wallet.solBalance = 0;
+                            wallet.caBalance = 0;
                         }
-                    } catch (error) {
-                        console.warn(`Failed to fetch balances for wallet ${wallet.index}:`, error);
-                        wallet.solBalance = 0;
-                        wallet.caBalance = 0;
-                    }
-                })
-            );
-            
-            // Update state after each batch
-            setSubwallets([...updatedWallets]);
-            
-            // Add delay between batches to avoid rate limits
-            if (i + batchSize < updatedWallets.length) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                    })
+                );
+                
+                // Update state after each batch
+                setSubwallets([...updatedWallets]);
+                
+                // Add delay between batches to avoid rate limits
+                if (i + batchSize < updatedWallets.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
             }
+            
+            setSubwallets([...updatedWallets]);
+        } catch (error) {
+            console.error('Error fetching balances:', error);
+            setError('Failed to fetch balances');
+            setTimeout(() => setError(null), 5000);
+        } finally {
+            setIsLoading(false);
+            setLoadingAction(null);
         }
-        
-        setIsLoading(false);
+    };
+
+    const saveToLocalStorage = (wallets: Subwallet[], parentAddress: string) => {
+        try {
+            const data = {
+                parentWallet: parentAddress,
+                subwallets: wallets,
+                timestamp: new Date().toISOString()
+            };
+            localStorage.setItem('sniperfi_subwallets', JSON.stringify(data));
+        } catch (error) {
+            console.error('Error saving to local storage:', error);
+        }
+    };
+
+    const loadFromLocalStorage = async () => {
+        try {
+            const data = localStorage.getItem('sniperfi_subwallets');
+            if (!data || !publicKey) return;
+
+            const parsed = JSON.parse(data) as {
+                parentWallet: string;
+                subwallets: Subwallet[];
+                timestamp: string;
+            };
+
+            if (parsed.parentWallet === publicKey.toString()) {
+                const loadedWallets = parsed.subwallets.map(wallet => ({
+                    ...wallet,
+                    isRevealed: false,
+                    solBalance: 0,
+                    caBalance: 0
+                }));
+
+                setSubwallets(loadedWallets);
+                await fetchBalances(loadedWallets);
+            }
+        } catch (error) {
+            console.error('Error loading from local storage:', error);
+        }
     };
 
     const generateSubwallets = async () => {
-        if (!publicKey || !signMessage) return;
+        if (!publicKey || !signMessage || hasGeneratedWallets) {
+            if (hasGeneratedWallets) {
+                setError('Subwallets already generated for this wallet');
+                setTimeout(() => setError(null), 5000);
+            }
+            return;
+        }
 
         setIsGenerating(true);
         try {
@@ -139,9 +240,13 @@ const SubwalletsPage: FC = () => {
             }
             
             setSubwallets(newSubwallets);
+            setHasGeneratedWallets(true);
+            saveToLocalStorage(newSubwallets, publicKey.toString());
             await fetchBalances(newSubwallets);
         } catch (error) {
             console.error('Error generating subwallets:', error);
+            setError('Failed to generate subwallets');
+            setTimeout(() => setError(null), 5000);
         }
         setIsGenerating(false);
     };
@@ -221,9 +326,10 @@ const SubwalletsPage: FC = () => {
 
     const restoreSubwallets = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
         const file = event.target.files?.[0];
-        if (!file) return;
+        if (!file || !publicKey) return;
 
-        setIsRestoring(true);
+        setLoadingAction('restoring');
+        setIsLoading(true);
         try {
             const fileContent = await file.text();
             const jsonData = JSON.parse(fileContent) as {
@@ -231,13 +337,11 @@ const SubwalletsPage: FC = () => {
                 subwallets: Subwallet[];
             };
 
-            // Validate the JSON structure
             if (!jsonData.subwallets || !Array.isArray(jsonData.subwallets)) {
                 throw new Error('Invalid wallet file format');
             }
 
-            // Validate parent wallet matches
-            if (publicKey && jsonData.parentWallet !== publicKey.toString()) {
+            if (jsonData.parentWallet !== publicKey.toString()) {
                 setError('Warning: This file was generated with a different parent wallet');
                 setTimeout(() => setError(null), 5000);
             }
@@ -250,16 +354,17 @@ const SubwalletsPage: FC = () => {
             }));
 
             setSubwallets(restoredWallets);
-            // Fetch fresh balances for restored wallets
+            saveToLocalStorage(restoredWallets, publicKey.toString());
             await fetchBalances(restoredWallets);
         } catch (error) {
             console.error('Error restoring wallets:', error);
             setError('Failed to restore wallets: Invalid file format');
             setTimeout(() => setError(null), 5000);
         } finally {
-            setIsRestoring(false);
+            setIsLoading(false);
+            setLoadingAction(null);
             if (fileInputRef.current) {
-                fileInputRef.current.value = ''; // Reset file input
+                fileInputRef.current.value = '';
             }
         }
     };
@@ -267,12 +372,7 @@ const SubwalletsPage: FC = () => {
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
-                <h1 className="text-4xl font-bold mb-8 text-white">Subwallets Generator</h1>
-                <div className="mb-8">
-                    <div className="!bg-purple-600 hover:!bg-purple-700 h-10 px-4 rounded cursor-wait">
-                        Loading...
-                    </div>
-                </div>
+                <h1 className="text-4xl font-bold mb-8 text-white">Loading...</h1>
             </div>
         );
     }
@@ -308,18 +408,27 @@ const SubwalletsPage: FC = () => {
                     </div>
 
                     <div className="flex space-x-4 items-center flex-wrap gap-y-4">
-                        <button
-                            onClick={generateSubwallets}
-                            disabled={isGenerating}
-                            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
-                        </button>
+                        {!hasGeneratedWallets ? (
+                            <button
+                                onClick={generateSubwallets}
+                                disabled={isLoading || isGenerating}
+                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isGenerating ? 'Generating...' : 'Generate 100 Subwallets'}
+                            </button>
+                        ) : (
+                            <div className="bg-gray-800 p-4 rounded-lg">
+                                <p className="text-gray-300">
+                                    Subwallets already generated for this wallet
+                                </p>
+                            </div>
+                        )}
 
                         {subwallets.length > 0 && (
                             <button
                                 onClick={downloadSubwallets}
-                                className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded flex items-center space-x-2"
+                                disabled={isLoading}
+                                className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <span>Download Subwallets</span>
                                 <span>📥</span>
@@ -334,14 +443,17 @@ const SubwalletsPage: FC = () => {
                                 accept="application/json"
                                 className="hidden"
                                 id="restore-file"
+                                disabled={isLoading}
                             />
                             <button
                                 onClick={() => fileInputRef.current?.click()}
-                                disabled={isRestoring}
+                                disabled={isLoading}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                <span>{isRestoring ? 'Restoring...' : 'Restore Subwallets'}</span>
-                                <span>📤</span>
+                                <span>
+                                    {loadingAction === 'restoring' ? 'Restoring...' : 'Restore Subwallets'}
+                                </span>
+                                <span>{loadingAction === 'restoring' ? '⏳' : '📤'}</span>
                             </button>
                         </div>
 
@@ -387,12 +499,29 @@ const SubwalletsPage: FC = () => {
                             <button
                                 onClick={() => fetchBalances(subwallets)}
                                 disabled={isLoading}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                             >
-                                {isLoading ? 'Refreshing...' : 'Refresh Balances'}
+                                <span>
+                                    {loadingAction === 'refreshing' ? 'Refreshing...' : 'Refresh Balances'}
+                                </span>
+                                <span>{loadingAction === 'refreshing' ? '⏳' : '🔄'}</span>
                             </button>
                         )}
                     </div>
+
+                    {publicKey && subwallets.length === 0 && (
+                        <div className="text-center py-6 bg-gray-800/50 rounded-lg mt-4">
+                            <p className="text-gray-300">No subwallets found. Generate new ones or restore from a file.</p>
+                        </div>
+                    )}
+
+                    {isLoading && (
+                        <div className="text-center py-4">
+                            <p className="text-gray-300">
+                                {loadingAction === 'refreshing' ? 'Refreshing balances...' : 'Restoring wallets...'}
+                            </p>
+                        </div>
+                    )}
 
                     {subwallets.length > 0 && (
                         <div className="mt-8">
