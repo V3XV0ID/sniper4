@@ -476,11 +476,9 @@ const SubwalletsPage: FC = () => {
     });
     const [isProcessing, setIsProcessing] = useState(false);
     const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
-    const [isLoadingToken, setIsLoadingToken] = useState(false);
-    const [showFundModal, setShowFundModal] = useState(false);
+    const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
     const [inputValue, setInputValue] = useState('');
     const [displayedTokenName, setDisplayedTokenName] = useState('CA Balance');
-    const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
 
     useEffect(() => {
         setMounted(true);
@@ -540,67 +538,17 @@ const SubwalletsPage: FC = () => {
         return () => clearTimeout(timer);
     }, []);
 
-    // Add this effect to fetch token name when CA changes
+    // Debounced auto-loading
     useEffect(() => {
-        let isSubscribed = true;
-
-        const getTokenInfo = async () => {
-            if (!inputValue) {
-                setTokenInfo(null);
-                setError(null);
-                return;
+        // Clear timeout on each input change
+        const timeoutId = setTimeout(() => {
+            if (inputValue.trim()) {
+                fetchTokenInfo(inputValue, false); // false = don't show loading state
             }
+        }, 1000); // 1 second delay for auto-loading
 
-            setIsLoadingToken(true);
-            setError(null);
-
-            try {
-                const address = extractAddress(inputValue);
-                
-                if (!address) {
-                    setError('Invalid token address or URL');
-                    return;
-                }
-
-                // Validate it's a valid Solana address
-                try {
-                    new PublicKey(address);
-                } catch {
-                    setError('Invalid Solana address format');
-                    return;
-                }
-
-                const info = await fetchTokenInfo(address);
-                
-                if (isSubscribed) {
-                    if (info) {
-                        setTokenInfo(info);
-                        setError(null);
-                        setDisplayedTokenName(`${info.symbol || info.name} Balance`);
-                    } else {
-                        setTokenInfo(null);
-                        setError('Token not found');
-                    }
-                }
-            } catch (error) {
-                if (isSubscribed) {
-                    console.error('Error:', error);
-                    setTokenInfo(null);
-                    setError('Failed to fetch token information');
-                }
-            } finally {
-                if (isSubscribed) {
-                    setIsLoadingToken(false);
-                }
-            }
-        };
-
-        const timeoutId = setTimeout(getTokenInfo, 500);
-
-        return () => {
-            isSubscribed = false;
-            clearTimeout(timeoutId);
-        };
+        // Cleanup timeout
+        return () => clearTimeout(timeoutId);
     }, [inputValue]);
 
     // Debug logging to track state updates
@@ -1181,91 +1129,71 @@ const SubwalletsPage: FC = () => {
         console.log('Selling all tokens');
     };
 
-    const handleEnter = async () => {
-        if (!inputValue.trim()) return;
-        
+    // Single function to handle token fetching
+    const handleTokenFetch = async () => {
+        if (!inputValue.trim() || isLoading) return;
+
         setIsLoading(true);
         try {
+            console.log('Fetching token info for:', inputValue);
             const address = extractAddress(inputValue);
+            
             if (!address) {
-                console.error('Invalid address format');
+                console.log('Invalid address format');
                 return;
             }
 
-            console.log('Extracted address:', address);
-            const info = await fetchTokenInfo(address);
-            
-            if (info) {
-                console.log('Successfully found token info:', info);
-                setTokenInfo(info);
-                await fetchTokenStats(info.address);
-            } else {
-                console.log('No token info found');
-                setTokenInfo(null);
+            // Fetch from DEXScreener
+            const response = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${address}`);
+            const data = await response.json();
+            console.log('DEXScreener response:', data);
+
+            if (data.pairs && data.pairs[0]) {
+                const pair = data.pairs[0];
+                const token = pair.baseToken;
+
+                // Set token info
+                setTokenInfo({
+                    name: token.name,
+                    symbol: token.symbol,
+                    address: token.address
+                });
+
+                // Set token stats
+                setTokenStats({
+                    price: {
+                        usd: parseFloat(pair.priceUsd || '0'),
+                        sol: parseFloat(pair.priceNative || '0')
+                    },
+                    changes: {
+                        m5: pair.priceChange?.m5 || 0,
+                        h1: pair.priceChange?.h1 || 0,
+                        h6: pair.priceChange?.h6 || 0,
+                        h24: pair.priceChange?.h24 || 0
+                    },
+                    volume: pair.volume?.h24 || 0,
+                    txns: pair.txns?.h24 || { buys: 0, sells: 0 }
+                });
+
+                console.log('Successfully set token info and stats');
             }
         } catch (error) {
-            console.error('Error in handleEnter:', error);
-            setTokenInfo(null);
+            console.error('Error fetching token:', error);
         } finally {
             setIsLoading(false);
         }
     };
 
-    const handleClear = () => {
-        setInputValue('');
-        setTokenInfo(null);
-        localStorage.removeItem('currentToken');
-    };
-
-    const handleKeyPress = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
-            handleEnter();
-        }
+    // Handle Enter button click
+    const handleEnter = () => {
+        if (!inputValue.trim()) return;
+        handleTokenFetch();
     };
 
     // Add useEffect to debug UI updates
     useEffect(() => {
         console.log('Rendering with tokenInfo:', tokenInfo);
     }, [tokenInfo]);
-
-    const fetchTokenStats = async (address: string) => {
-        try {
-            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${address}`);
-            const data = await response.json();
-            
-            if (data.pairs && data.pairs[0]) {
-                const pair = data.pairs[0];
-                setTokenStats({
-                    price: {
-                        usd: parseFloat(pair.priceUsd),
-                        sol: parseFloat(pair.priceNative),
-                    },
-                    changes: {
-                        m5: pair.priceChange.m5,
-                        h1: pair.priceChange.h1,
-                        h6: pair.priceChange.h6,
-                        h24: pair.priceChange.h24,
-                    },
-                    volume: {
-                        usd: pair.volume.h24,
-                        buys: pair.txns.h24.buys,
-                        sells: pair.txns.h24.sells,
-                        buyVolume: pair.volume.h24.buyVolume,
-                        sellVolume: pair.volume.h24.sellVolume,
-                    },
-                    transactions: {
-                        total: pair.txns.h24.total,
-                        buys: pair.txns.h24.buys,
-                        sells: pair.txns.h24.sells,
-                        buyers: pair.txns.h24.buyers,
-                        sellers: pair.txns.h24.sellers,
-                    },
-                });
-            }
-        } catch (error) {
-            console.error('Error fetching token stats:', error);
-        }
-    };
 
     if (!mounted) {
         return (
@@ -1327,30 +1255,28 @@ const SubwalletsPage: FC = () => {
                             type="text"
                             value={inputValue}
                             onChange={(e) => setInputValue(e.target.value)}
-                            onKeyPress={handleKeyPress}
+                            onKeyPress={handleEnter}
                             placeholder="Enter CA or URL"
                             className="bg-gray-700 rounded p-2 text-white w-64"
                         />
                         <button
                             onClick={handleEnter}
-                            disabled={isLoadingToken || !inputValue.trim()}
+                            disabled={isLoading || !inputValue.trim()}
                             className={`px-4 py-2 rounded ${
-                                isLoadingToken || !inputValue.trim()
-                                    ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                                    : 'bg-gray-700 hover:bg-gray-600 text-white'
+                                isLoading || !inputValue.trim()
+                                    ? 'bg-gray-600 cursor-not-allowed'
+                                    : 'bg-gray-700 hover:bg-gray-600'
                             }`}
                         >
-                            {isLoadingToken ? (
-                                <span className="flex items-center gap-2">
-                                    <span className="animate-spin">⏳</span>
-                                </span>
-                            ) : (
-                                'Enter'
-                            )}
+                            {isLoading ? '⏳' : 'Enter'}
                         </button>
                         <button
-                            onClick={handleClear}
-                            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-white"
+                            onClick={() => {
+                                setInputValue('');
+                                setTokenInfo(null);
+                                setTokenStats(null);
+                            }}
+                            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded"
                         >
                             Clear
                         </button>
@@ -1417,59 +1343,37 @@ const SubwalletsPage: FC = () => {
             <div className="overflow-x-auto">
                 <table className="min-w-full bg-gray-800/50 rounded-lg overflow-hidden">
                     <thead>
-                        <tr className="border-b border-gray-700">
-                            <th className="py-3 px-4">INDEX</th>
-                            <th className="py-3 px-4">PUBLIC KEY</th>
-                            <th className="py-3 px-4" colSpan={2}>PRIVATE KEY</th>
-                            <th className="py-3 px-4">SOL BALANCE</th>
-                            <th className="py-3 px-4">CA BALANCE</th>
+                        <tr>
+                            <th className="px-4 py-2 text-left">INDEX</th>
+                            <th className="px-4 py-2 text-left">PUBLIC KEY</th>
+                            <th className="px-4 py-2">PRIVATE KEY</th>
+                            <th className="px-4 py-2 text-right">SOL BALANCE</th>
+                            <th className="px-4 py-2 text-right">
+                                {isLoading ? (
+                                    <span className="animate-pulse">Loading...</span>
+                                ) : tokenInfo ? (
+                                    `${tokenInfo.symbol} BALANCE`
+                                ) : (
+                                    'CA BALANCE'
+                                )}
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
                         {subwallets.map((wallet, index) => (
-                            <tr key={index} className={index % 2 === 0 ? 'bg-gray-800' : ''}>
-                                <td className="py-2 px-4">{index}</td>
-                                <td className="py-2 px-4">
-                                    <div className="flex items-center space-x-2">
-                                        <button
-                                            onClick={() => void copyToClipboard(wallet.publicKey, index, 'public')}
-                                            className="text-gray-400 hover:text-white transition-colors"
-                                            title="Copy public key"
-                                        >
-                                            {isCopied(index, 'public') ? '✓' : '📋'}
-                                        </button>
-                                        <span className="font-mono">{truncateKey(wallet.publicKey)}</span>
-                                    </div>
+                            <tr key={index} className="border-t border-gray-700">
+                                <td className="px-4 py-2">{index}</td>
+                                <td className="px-4 py-2 font-mono text-sm">
+                                    {truncateKey(wallet.publicKey.toString())}
                                 </td>
-                                <td className="py-2 pr-0 pl-4 w-10">
-                                    <button
-                                        onClick={() => void copyToClipboard(wallet.privateKey, index, 'private')}
-                                        className="text-gray-400 hover:text-white transition-colors"
-                                        title="Copy private key"
-                                    >
-                                        {isCopied(index, 'private') ? '✓' : '📋'}
-                                    </button>
+                                <td className="px-4 py-2 font-mono text-sm">
+                                    {truncateKey(wallet.privateKey)}
                                 </td>
-                                <td className="py-2 pl-2 pr-4">
-                                    <div className="font-mono text-gray-400">
-                                        {formatPrivateKey(wallet.privateKey)}
-                                    </div>
+                                <td className="px-4 py-2 text-right">
+                                    {wallet.solBalance || '0'} SOL
                                 </td>
-                                <td className="py-2 px-4">
-                                    {wallet.isLoading ? (
-                                        <span className="animate-pulse">Loading...</span>
-                                    ) : (
-                                        `${wallet.solBalance} SOL`
-                                    )}
-                                </td>
-                                <td className="py-2 px-4">
-                                    {wallet.isLoading ? (
-                                        <span className="animate-pulse">Loading...</span>
-                                    ) : (
-                                        <span className="font-medium text-blue-400">
-                                            {tokenInfo ? tokenInfo.symbol : 'CA Balance'}
-                                        </span>
-                                    )}
+                                <td className="px-4 py-2 text-right">
+                                    {wallet.caBalance || '0'}
                                 </td>
                             </tr>
                         ))}
