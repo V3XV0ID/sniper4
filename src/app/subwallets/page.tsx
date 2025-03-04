@@ -39,7 +39,10 @@ const SubwalletsPage: FC = () => {
         setMounted(true);
     }, []);
 
-    const truncateKey = (key: string) => `${key.slice(0, 12)}...`;
+    const truncateKey = (key: string) => {
+        if (key.length <= 8) return key;
+        return `${key.slice(0, 4)}...${key.slice(-4)}`;
+    };
     const formatBalance = (balance: number) => balance.toFixed(4);
 
     const fetchBalanceWithRetry = async (pubKey: string, retries = 3): Promise<number> => {
