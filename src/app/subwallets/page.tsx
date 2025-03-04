@@ -399,22 +399,28 @@ const SubwalletsPage: FC = () => {
                                     <span>Download Subwallets</span>
                                     <span>📥</span>
                                 </button>
-                                <div className="relative">
-                                    <input
-                                        type="file"
-                                        ref={fileInputRef}
-                                        onChange={restoreSubwallets}
-                                        className="hidden"
-                                        accept=".json"
-                                    />
-                                    <button
-                                        onClick={() => fileInputRef.current?.click()}
-                                        disabled={isLoading}
-                                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        Restore Subwallets
-                                    </button>
-                                </div>
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={isLoading}
+                                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Restore Subwallets
+                                </button>
+                                <button
+                                    onClick={refreshBalances}
+                                    disabled={isLoading || !subwallets.length}
+                                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                                >
+                                    <span>Refresh Balances</span>
+                                    <span>🔄</span>
+                                </button>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={restoreSubwallets}
+                                    className="hidden"
+                                    accept=".json"
+                                />
                             </>
                         ) : (
                             <button
