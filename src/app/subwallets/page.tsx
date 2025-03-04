@@ -369,6 +369,54 @@ const SubwalletsPage: FC = () => {
         }
     };
 
+    const refreshBalances = async () => {
+        if (!publicKey || !subwallets.length || isLoading) return;
+        
+        setIsLoading(true);
+        try {
+            const connection = new Connection(
+                'https://api.mainnet-beta.solana.com',
+                'confirmed'
+            );
+
+            const updatedSubwallets = [...subwallets];
+            
+            // Fetch balances in batches to avoid rate limits
+            for (let i = 0; i < updatedSubwallets.length; i++) {
+                const wallet = updatedSubwallets[i];
+                const address = new PublicKey(wallet.publicKey);
+                
+                // Get SOL balance
+                const solBalance = await connection.getBalance(address);
+                updatedSubwallets[i].solBalance = solBalance / LAMPORTS_PER_SOL;
+
+                // Get CA balance if address is provided
+                if (caAddress) {
+                    try {
+                        const tokenAddress = new PublicKey(caAddress);
+                        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+                            address,
+                            { mint: tokenAddress }
+                        );
+                        const balance = tokenAccounts.value[0]?.account.data.parsed.info.tokenAmount.uiAmount || 0;
+                        updatedSubwallets[i].caBalance = balance;
+                    } catch (err) {
+                        console.error('Error fetching token balance:', err);
+                        updatedSubwallets[i].caBalance = 0;
+                    }
+                }
+            }
+
+            setSubwallets(updatedSubwallets);
+        } catch (error) {
+            console.error('Error refreshing balances:', error);
+            setError('Failed to refresh balances');
+            setTimeout(() => setError(null), 5000);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
@@ -407,7 +455,7 @@ const SubwalletsPage: FC = () => {
                                     Restore Subwallets
                                 </button>
                                 <button
-                                    onClick={refreshBalances}
+                                    onClick={() => void refreshBalances()}
                                     disabled={isLoading || !subwallets.length}
                                     className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                                 >
@@ -447,7 +495,6 @@ const SubwalletsPage: FC = () => {
                         <div className="flex items-center space-x-4">
                             <span className="text-gray-400">Parent Wallet</span>
                             <div className="flex items-center space-x-2">
-                                <span className="font-mono">{publicKey.toString()}</span>
                                 <button
                                     onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
                                     className="text-gray-400 hover:text-white transition-colors"
@@ -455,6 +502,7 @@ const SubwalletsPage: FC = () => {
                                 >
                                     {isCopied(-1, 'public') ? '✓' : '📋'}
                                 </button>
+                                <span className="font-mono">{publicKey.toString()}</span>
                             </div>
                         </div>
                     </div>
@@ -464,14 +512,14 @@ const SubwalletsPage: FC = () => {
                             <input
                                 type="text"
                                 placeholder="Enter CA Address (optional)"
-                                value={pendingCa}
-                                onChange={(e) => setPendingCa(e.target.value)}
+                                value={caAddress}
+                                onChange={(e) => setCaAddress(e.target.value)}
                                 onKeyPress={handleCaKeyPress}
                                 className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
                             />
                             <button
                                 onClick={() => handleCaSubmit()}
-                                disabled={!pendingCa.trim()}
+                                disabled={!caAddress.trim()}
                                 className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                             >
                                 <span>Enter</span>
@@ -497,19 +545,6 @@ const SubwalletsPage: FC = () => {
                                 </button>
                             </div>
                         )}
-
-                        {subwallets.length > 0 && (
-                            <button
-                                onClick={() => fetchBalances(subwallets)}
-                                disabled={isLoading}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-                            >
-                                <span>
-                                    {loadingAction === 'refreshing' ? 'Refreshing...' : 'Refresh Balances'}
-                                </span>
-                                <span>{loadingAction === 'refreshing' ? '⏳' : '🔄'}</span>
-                            </button>
-                        )}
                     </div>
 
                     {publicKey && subwallets.length === 0 && (
@@ -531,72 +566,51 @@ const SubwalletsPage: FC = () => {
                             <h2 className="text-2xl font-bold mb-4 text-white">Generated Subwallets</h2>
                             <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
                                 <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-gray-700">
-                                        <thead className="bg-gray-900">
-                                            <tr>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Index</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Public Key</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Private Key</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">SOL Balance</th>
-                                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">CA Balance</th>
+                                    <table className="w-full text-left">
+                                        <thead>
+                                            <tr className="border-b border-gray-700">
+                                                <th className="py-3 px-4">INDEX</th>
+                                                <th className="py-3 px-4">PUBLIC KEY</th>
+                                                <th className="py-3 px-4" colSpan={2}>PRIVATE KEY</th>
+                                                <th className="py-3 px-4">SOL BALANCE</th>
+                                                <th className="py-3 px-4">CA BALANCE</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="divide-y divide-gray-700">
-                                            {subwallets.map((wallet) => (
-                                                <tr key={wallet.index} className="hover:bg-gray-700">
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-300">
-                                                        {wallet.index}
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300">
+                                        <tbody>
+                                            {subwallets.map((wallet, index) => (
+                                                <tr key={index} className={index % 2 === 0 ? 'bg-gray-800' : ''}>
+                                                    <td className="py-2 px-4">{index}</td>
+                                                    <td className="py-2 px-4">
                                                         <div className="flex items-center space-x-2">
-                                                            <span>{truncateKey(wallet.publicKey)}</span>
                                                             <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    copyToClipboard(wallet.publicKey, wallet.index, 'public');
-                                                                }}
+                                                                onClick={() => void copyToClipboard(wallet.publicKey, index, 'public')}
                                                                 className="text-gray-400 hover:text-white transition-colors"
                                                                 title="Copy public key"
                                                             >
-                                                                {isCopied(wallet.index, 'public') ? '✓' : '📋'}
+                                                                {isCopied(index, 'public') ? '✓' : '📋'}
                                                             </button>
+                                                            <span className="font-mono">{truncateKey(wallet.publicKey)}</span>
                                                         </div>
                                                     </td>
-                                                    <td 
-                                                        className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-300 group"
-                                                    >
-                                                        <div className="flex items-center justify-between">
-                                                            <div 
-                                                                onClick={() => toggleReveal(wallet.index)}
-                                                                className="flex-1 cursor-pointer hover:bg-gray-600 transition-colors rounded px-2 py-1"
-                                                            >
-                                                                {wallet.isRevealed ? (
-                                                                    <span className="truncate max-w-md">{wallet.privateKey}</span>
-                                                                ) : (
-                                                                    <div className="flex items-center space-x-2">
-                                                                        <span className="text-gray-500">Click to reveal</span>
-                                                                        <span className="text-gray-500 group-hover:text-white transition-colors">🔒</span>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    copyToClipboard(wallet.privateKey, wallet.index, 'private');
-                                                                }}
-                                                                className="text-gray-400 hover:text-white transition-colors ml-2"
-                                                                title="Copy private key"
-                                                            >
-                                                                {isCopied(wallet.index, 'private') ? '✓' : '📋'}
-                                                            </button>
+                                                    <td className="py-2 pr-0 pl-4 w-10">
+                                                        <button
+                                                            onClick={() => void copyToClipboard(wallet.privateKey, index, 'private')}
+                                                            className="text-gray-400 hover:text-white transition-colors"
+                                                            title="Copy private key"
+                                                        >
+                                                            {isCopied(index, 'private') ? '✓' : '📋'}
+                                                        </button>
+                                                    </td>
+                                                    <td className="py-2 pl-2 pr-4">
+                                                        <div
+                                                            onClick={() => toggleReveal(index)}
+                                                            className="cursor-pointer font-mono"
+                                                        >
+                                                            {wallet.isRevealed ? wallet.privateKey : 'Click to reveal 🔒'}
                                                         </div>
                                                     </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                                                        {formatBalance(wallet.solBalance)} SOL
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                                                        {formatBalance(wallet.caBalance)}
-                                                    </td>
+                                                    <td className="py-2 px-4">{wallet.solBalance} SOL</td>
+                                                    <td className="py-2 px-4">{wallet.caBalance}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
