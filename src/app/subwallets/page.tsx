@@ -417,6 +417,12 @@ const SubwalletsPage: FC = () => {
         }
     };
 
+    const formatPrivateKey = (key: string) => {
+        const first4 = key.slice(0, 4);
+        const last4 = key.slice(-4);
+        return `${first4}...${last4}`;
+    };
+
     if (!mounted) {
         return (
             <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
@@ -429,7 +435,6 @@ const SubwalletsPage: FC = () => {
         <div className="min-h-screen bg-gray-900 text-white container mx-auto px-4 py-8">
             <div className="flex flex-wrap items-center gap-4 mb-8">
                 <WalletMultiButton />
-
                 {publicKey && (
                     <div className="flex items-center space-x-4 flex-wrap gap-y-4">
                         {hasGeneratedWallets ? (
@@ -490,135 +495,108 @@ const SubwalletsPage: FC = () => {
             )}
 
             {publicKey && (
-                <div className="space-y-6">
-                    <div className="bg-gray-800 rounded-lg p-4 mb-6">
+                <div className="flex gap-4 mb-6 items-start">
+                    <div className="bg-gray-800 rounded-lg p-4 w-1/2">
                         <div className="flex items-center space-x-4">
                             <span className="text-gray-400">Parent Wallet</span>
-                            <div className="flex items-center space-x-2">
+                            <div className="flex items-center space-x-2 overflow-hidden">
                                 <button
                                     onClick={() => void copyToClipboard(publicKey.toString(), -1, 'public')}
-                                    className="text-gray-400 hover:text-white transition-colors"
+                                    className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
                                     title="Copy public key"
                                 >
                                     {isCopied(-1, 'public') ? '✓' : '📋'}
                                 </button>
-                                <span className="font-mono">{publicKey.toString()}</span>
+                                <span className="font-mono truncate">{publicKey.toString()}</span>
                             </div>
                         </div>
                     </div>
 
-                    <div className="flex space-x-4 items-center flex-wrap gap-y-4">
-                        <div className="flex-1 flex space-x-2">
-                            <input
-                                type="text"
-                                placeholder="Enter CA Address (optional)"
-                                value={caAddress}
-                                onChange={(e) => setCaAddress(e.target.value)}
-                                onKeyPress={handleCaKeyPress}
-                                className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
-                            />
-                            <button
-                                onClick={() => handleCaSubmit()}
-                                disabled={!caAddress.trim()}
-                                className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-                            >
-                                <span>Enter</span>
-                                <span>↵</span>
-                            </button>
-                        </div>
-
-                        {caAddress && (
-                            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex items-center justify-between">
-                                <div>
-                                    <p className="text-gray-300">Current CA Address:</p>
-                                    <p className="font-mono text-white">{truncateKey(caAddress)}</p>
-                                </div>
-                                <button
-                                    onClick={() => {
-                                        setCaAddress('');
-                                        setPendingCa('');
-                                    }}
-                                    className="text-gray-400 hover:text-white transition-colors"
-                                    title="Clear CA Address"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-                        )}
+                    <div className="flex-1 flex gap-4">
+                        <input
+                            type="text"
+                            placeholder="Enter CA Address (optional)"
+                            value={caAddress}
+                            onChange={(e) => setCaAddress(e.target.value)}
+                            className="flex-1 bg-gray-800 text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                            onClick={() => setCaAddress('')}
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded"
+                        >
+                            Enter ↵
+                        </button>
                     </div>
+                </div>
+            )}
 
-                    {publicKey && subwallets.length === 0 && (
-                        <div className="text-center py-6 bg-gray-800/50 rounded-lg mt-4">
-                            <p className="text-gray-300">No subwallets found. Generate new ones or restore from a file.</p>
-                        </div>
-                    )}
+            {publicKey && subwallets.length === 0 && (
+                <div className="text-center py-6 bg-gray-800/50 rounded-lg mt-4">
+                    <p className="text-gray-300">No subwallets found. Generate new ones or restore from a file.</p>
+                </div>
+            )}
 
-                    {isLoading && (
-                        <div className="text-center py-4">
-                            <p className="text-gray-300">
-                                {loadingAction === 'refreshing' ? 'Refreshing balances...' : 'Restoring wallets...'}
-                            </p>
-                        </div>
-                    )}
+            {isLoading && (
+                <div className="text-center py-4">
+                    <p className="text-gray-300">
+                        {loadingAction === 'refreshing' ? 'Refreshing balances...' : 'Restoring wallets...'}
+                    </p>
+                </div>
+            )}
 
-                    {subwallets.length > 0 && (
-                        <div className="mt-8">
-                            <h2 className="text-2xl font-bold mb-4 text-white">Generated Subwallets</h2>
-                            <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-left">
-                                        <thead>
-                                            <tr className="border-b border-gray-700">
-                                                <th className="py-3 px-4">INDEX</th>
-                                                <th className="py-3 px-4">PUBLIC KEY</th>
-                                                <th className="py-3 px-4" colSpan={2}>PRIVATE KEY</th>
-                                                <th className="py-3 px-4">SOL BALANCE</th>
-                                                <th className="py-3 px-4">CA BALANCE</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {subwallets.map((wallet, index) => (
-                                                <tr key={index} className={index % 2 === 0 ? 'bg-gray-800' : ''}>
-                                                    <td className="py-2 px-4">{index}</td>
-                                                    <td className="py-2 px-4">
-                                                        <div className="flex items-center space-x-2">
-                                                            <button
-                                                                onClick={() => void copyToClipboard(wallet.publicKey, index, 'public')}
-                                                                className="text-gray-400 hover:text-white transition-colors"
-                                                                title="Copy public key"
-                                                            >
-                                                                {isCopied(index, 'public') ? '✓' : '📋'}
-                                                            </button>
-                                                            <span className="font-mono">{truncateKey(wallet.publicKey)}</span>
-                                                        </div>
-                                                    </td>
-                                                    <td className="py-2 pr-0 pl-4 w-10">
-                                                        <button
-                                                            onClick={() => void copyToClipboard(wallet.privateKey, index, 'private')}
-                                                            className="text-gray-400 hover:text-white transition-colors"
-                                                            title="Copy private key"
-                                                        >
-                                                            {isCopied(index, 'private') ? '✓' : '📋'}
-                                                        </button>
-                                                    </td>
-                                                    <td className="py-2 pl-2 pr-4">
-                                                        <div
-                                                            onClick={() => toggleReveal(index)}
-                                                            className="cursor-pointer font-mono"
-                                                        >
-                                                            {wallet.isRevealed ? wallet.privateKey : 'Click to reveal 🔒'}
-                                                        </div>
-                                                    </td>
-                                                    <td className="py-2 px-4">{wallet.solBalance} SOL</td>
-                                                    <td className="py-2 px-4">{wallet.caBalance}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
+            {subwallets.length > 0 && (
+                <div className="mt-8">
+                    <h2 className="text-2xl font-bold mb-4 text-white">Generated Subwallets</h2>
+                    <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead>
+                                    <tr className="border-b border-gray-700">
+                                        <th className="py-3 px-4">INDEX</th>
+                                        <th className="py-3 px-4">PUBLIC KEY</th>
+                                        <th className="py-3 px-4" colSpan={2}>PRIVATE KEY</th>
+                                        <th className="py-3 px-4">SOL BALANCE</th>
+                                        <th className="py-3 px-4">CA BALANCE</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {subwallets.map((wallet, index) => (
+                                        <tr key={index} className={index % 2 === 0 ? 'bg-gray-800' : ''}>
+                                            <td className="py-2 px-4">{index}</td>
+                                            <td className="py-2 px-4">
+                                                <div className="flex items-center space-x-2">
+                                                    <button
+                                                        onClick={() => void copyToClipboard(wallet.publicKey, index, 'public')}
+                                                        className="text-gray-400 hover:text-white transition-colors"
+                                                        title="Copy public key"
+                                                    >
+                                                        {isCopied(index, 'public') ? '✓' : '📋'}
+                                                    </button>
+                                                    <span className="font-mono">{truncateKey(wallet.publicKey)}</span>
+                                                </div>
+                                            </td>
+                                            <td className="py-2 pr-0 pl-4 w-10">
+                                                <button
+                                                    onClick={() => void copyToClipboard(wallet.privateKey, index, 'private')}
+                                                    className="text-gray-400 hover:text-white transition-colors"
+                                                    title="Copy private key"
+                                                >
+                                                    {isCopied(index, 'private') ? '✓' : '📋'}
+                                                </button>
+                                            </td>
+                                            <td className="py-2 pl-2 pr-4">
+                                                <div className="font-mono text-gray-400">
+                                                    {formatPrivateKey(wallet.privateKey)}
+                                                </div>
+                                            </td>
+                                            <td className="py-2 px-4">{wallet.solBalance} SOL</td>
+                                            <td className="py-2 px-4">{wallet.caBalance}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
-                    )}
+                    </div>
                 </div>
             )}
         </div>
